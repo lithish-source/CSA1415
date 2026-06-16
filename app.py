@@ -1,0 +1,1721 @@
+import os
+import requests
+import tempfile
+import textwrap
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit.components.v1 as components
+
+# Import analytical modules
+from src.data_cleaning import clean_data
+from src.pca_model import run_pca_analysis
+from src.risk_calculator import calculate_water_quality_risk_index, match_bis_standard
+from src.health_engine import analyze_district_health_hazards
+from src.gemini_insights import answer_citizen_query, generate_treatment_recommendation
+from src.gis_mapping import render_district_map, render_parameter_map
+from src.pdf_generator import generate_district_pdf_report
+
+def clean_html(html_str):
+    return "\n".join(line.strip() for line in html_str.split("\n") if line.strip())
+
+# Page Configuration
+st.set_page_config(
+    page_title="GroundWater Guardian India",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# Custom Styling (SaaS Dark Theme: Stripe & Apple Weather inspired design)
+st.markdown("""
+    <style>
+    /* Force high-end dark background on Streamlit elements */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+        background-color: #080c14 !important;
+        color: #f3f4f6 !important;
+        font-family: 'Inter', sans-serif !important;
+    }
+    
+    /* Hiding Streamlit navigation & default headers */
+    [data-testid="sidebar"] {
+        display: none !important;
+    }
+    [data-testid="collapsedControl"] {
+        display: none !important;
+    }
+    header {
+        visibility: hidden;
+    }
+    
+    /* Import Modern Typography */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+    
+    /* Custom style for native Streamlit selectbox container */
+    div[data-testid="stSelectbox"] label {
+        display: none !important;
+    }
+    div[data-testid="stSelectbox"] > div {
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        border-radius: 10px !important;
+        background-color: #111827 !important;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2) !important;
+        color: #ffffff !important;
+    }
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] {
+        background-color: transparent !important;
+        color: #ffffff !important;
+    }
+    div[data-testid="stSelectbox"] svg {
+        fill: #94a3b8 !important;
+    }
+    
+    /* Style for dropdown menu option list */
+    ul[role="listbox"] {
+        background-color: #111827 !important;
+        color: #ffffff !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    }
+    li[role="option"] {
+        color: #ffffff !important;
+    }
+    li[role="option"]:hover {
+        background-color: #1f2937 !important;
+    }
+    
+    /* Custom style for native download button to match design system */
+    div[data-testid="stDownloadButton"] button {
+        background-color: #3b82f6 !important;
+        color: white !important;
+        font-weight: 600 !important;
+        border-radius: 10px !important;
+        padding: 10px 24px !important;
+        border: 1px solid #3b82f6 !important;
+        transition: background-color 0.2s, border-color 0.2s !important;
+        width: 100% !important;
+    }
+    div[data-testid="stDownloadButton"] button:hover {
+        background-color: #2563eb !important;
+        border-color: #2563eb !important;
+        color: white !important;
+    }
+    
+    /* Custom advisor input styling */
+    div[data-testid="stForm"] {
+        max-width: 700px !important;
+        margin: 0 auto !important;
+        border: 0 !important;
+        background: transparent !important;
+    }
+    div[data-testid="stTextInput"] input {
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        border-radius: 14px !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
+        background-color: #111827 !important;
+        color: #ffffff !important;
+    }
+    div[data-testid="stFormSubmitButton"] button {
+        background-color: #3b82f6 !important;
+        color: #ffffff !important;
+        border-radius: 12px !important;
+        border: 1px solid #3b82f6 !important;
+        font-weight: 700 !important;
+    }
+    
+    /* Navigation Bar */
+    .block-container {
+        padding-top: 0rem !important;
+        max-width: 1180px !important;
+    }
+    .navbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        background-color: rgba(8, 12, 20, 0.78);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        padding: 16px 28px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        margin: 0 -4rem 40px -4rem;
+    }
+    .brand {
+        font-size: 1.25rem;
+        font-weight: 800;
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .brand-sub {
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: #94a3b8;
+    }
+    .nav-links {
+        display: flex;
+        gap: 22px;
+        align-items: center;
+    }
+    .nav-links a {
+        color: #cbd5e1 !important;
+        text-decoration: none !important;
+        font-size: 0.9rem;
+        font-weight: 650;
+    }
+    .nav-links a:hover {
+        color: #ffffff !important;
+    }
+    
+    /* Hero Section */
+    .hero-box {
+        text-align: center;
+        max-width: 900px;
+        margin: 34px auto 22px auto;
+        padding: 42px 20px 20px 20px;
+    }
+    .hero-box h1 {
+        font-size: 4.15rem !important;
+        font-weight: 800 !important;
+        background: linear-gradient(135deg, #ffffff 40%, #94a3b8 100%) !important;
+        -webkit-background-clip: text !important;
+        -webkit-text-fill-color: transparent !important;
+        letter-spacing: -0.04em !important;
+        margin-bottom: 12px !important;
+        line-height: 1.1 !important;
+    }
+    .hero-box p {
+        font-size: 1.28rem !important;
+        color: #94a3b8 !important;
+        margin-bottom: 0px !important;
+        font-weight: 400 !important;
+    }
+    .hero-actions {
+        margin-top: 28px;
+        color: #64748b;
+        font-size: 0.85rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+    
+    /* Result card container */
+    .result-container {
+        display: flex;
+        justify-content: center;
+        margin-bottom: 20px;
+        padding: 0 20px;
+    }
+    
+    /* Apple Weather-style Result Card (Glassmorphic Dark) */
+    .result-card {
+        background-color: rgba(17, 24, 39, 0.75);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-radius: 20px;
+        padding: 35px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        text-align: center;
+        width: 100%;
+        max-width: 480px;
+    }
+    .result-layout {
+        display: grid;
+        grid-template-columns: minmax(320px, 0.75fr) minmax(420px, 1.25fr);
+        gap: 24px;
+        align-items: stretch;
+        margin: 20px 0 46px 0;
+    }
+    .map-shell {
+        background-color: rgba(17, 24, 39, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 18px;
+        padding: 14px 14px 2px 14px;
+        min-height: 600px;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+    }
+    .section-kicker {
+        color: #60a5fa;
+        font-size: 0.75rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+    }
+    .section-title {
+        color: #ffffff;
+        font-size: 1.65rem;
+        font-weight: 850;
+        margin: 0 0 8px 0;
+    }
+    .section-copy {
+        color: #94a3b8;
+        margin: 0 0 22px 0;
+        line-height: 1.55;
+    }
+    .nearby-card, .treatment-card {
+        background-color: rgba(17, 24, 39, 0.68);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 16px;
+        padding: 22px;
+        height: 100%;
+    }
+    .nearby-row {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .nearby-name {
+        color: #f8fafc;
+        font-weight: 750;
+    }
+    .nearby-meta {
+        color: #94a3b8;
+        font-size: 0.84rem;
+        font-weight: 650;
+    }
+    .treatment-card div[data-testid="stMarkdownContainer"] {
+        color: #dbeafe;
+    }
+    .result-category-badge {
+        font-size: 0.75rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        padding: 6px 16px;
+        border-radius: 30px;
+        display: inline-block;
+        margin-bottom: 15px;
+    }
+    .result-location {
+        font-size: 1.8rem;
+        font-weight: 800;
+        color: #ffffff;
+        margin-bottom: 5px;
+    }
+    .result-state {
+        font-size: 0.95rem;
+        color: #94a3b8;
+        font-weight: 500;
+        margin-bottom: 20px;
+    }
+    .score-title {
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        margin-bottom: 2px;
+    }
+    .score-display {
+        display: flex;
+        justify-content: center;
+        align-items: baseline;
+        margin-bottom: 8px;
+    }
+    .score-val {
+        font-size: 4.5rem;
+        font-weight: 800;
+        color: #ffffff;
+        line-height: 1;
+    }
+    .score-max {
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: #64748b;
+        margin-left: 5px;
+    }
+    .result-status-badge {
+        padding: 8px 20px;
+        border-radius: 10px;
+        font-weight: 700;
+        font-size: 0.95rem;
+        display: inline-block;
+        margin-bottom: 20px;
+    }
+    .result-info-grid {
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        padding-top: 20px;
+        text-align: left;
+        font-size: 0.9rem;
+    }
+    .info-row {
+        margin-bottom: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+    }
+    .info-label {
+        font-weight: 700;
+        color: #64748b;
+        text-transform: uppercase;
+        font-size: 0.7rem;
+        letter-spacing: 0.05em;
+    }
+    .info-val {
+        font-weight: 600;
+        color: #e2e8f0;
+    }
+    
+    /* Health Insight Cards Grid */
+    .insight-card {
+        background-color: rgba(17, 24, 39, 0.7);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        margin-bottom: 20px;
+    }
+    .insight-title {
+        font-size: 1.25rem;
+        font-weight: 800;
+        color: #ffffff;
+        margin-bottom: 12px;
+    }
+    .insight-label {
+        font-weight: 700;
+        color: #64748b;
+        text-transform: uppercase;
+        font-size: 0.7rem;
+        letter-spacing: 0.05em;
+        margin-bottom: 2px;
+    }
+    .insight-val {
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: #94a3b8;
+        margin-bottom: 15px;
+        flex-grow: 1;
+        line-height: 1.4;
+    }
+    .insight-badge {
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 0.75rem;
+        display: inline-block;
+        width: fit-content;
+    }
+    .insight-badge.exceeded {
+        background-color: rgba(220, 38, 38, 0.2);
+        color: #fca5a5;
+    }
+    .insight-badge.normal {
+        background-color: rgba(16, 185, 129, 0.2);
+        color: #a7f3d0;
+    }
+    
+    /* Comparison Card */
+    .comp-card {
+        background-color: rgba(17, 24, 39, 0.7);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 16px;
+        padding: 24px;
+        text-align: center;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    }
+    .anchor-offset {
+        scroll-margin-top: 90px;
+    }
+    @media (max-width: 900px) {
+        .navbar {
+            margin: 0 -1rem 28px -1rem;
+            padding: 14px 18px;
+        }
+        .nav-links {
+            display: none;
+        }
+        .hero-box h1 {
+            font-size: 2.65rem !important;
+        }
+        .result-layout {
+            grid-template-columns: 1fr;
+        }
+        .map-shell {
+            min-height: 460px;
+        }
+    }
+    .comp-name {
+        font-size: 1.4rem;
+        font-weight: 800;
+        color: #ffffff;
+        margin-bottom: 5px;
+    }
+    .comp-score {
+        font-size: 2.8rem;
+        font-weight: 800;
+        color: #ffffff;
+        margin: 15px 0 5px 0;
+    }
+    
+    /* State Alert Styling */
+    .state-alert-custom {
+        max-width: 480px;
+        margin: 0 auto 20px auto;
+        background-color: rgba(59, 130, 246, 0.15);
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        color: #93c5fd;
+        padding: 10px 16px;
+        border-radius: 10px;
+        text-align: center;
+        font-size: 0.85rem;
+        font-weight: 500;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# Register parent-level navigation listener in parent context using img onerror trick
+st.markdown("""
+    <img src="x" onerror="
+        if (!window.__navigationListenerRegistered) {
+            window.__navigationListenerRegistered = true;
+            window.addEventListener('message', function(event) {
+                if (event.data && event.data.type === 'navigate') {
+                    window.location.href = event.data.url;
+                }
+            });
+        }
+    " style="display:none;" />
+""", unsafe_allow_html=True)
+
+# ----------------- SILENT BACKEND INITIATION -----------------
+DEFAULT_EXCEL_PATH = "ground water quality dataset.xlsx"
+
+@st.cache_resource(show_spinner=False)
+def initialize_system_database():
+    """Reads, cleans, aggregates, and computes PCA risk scores silently on startup."""
+    if not os.path.exists(DEFAULT_EXCEL_PATH):
+        raise FileNotFoundError(f"Missing core database file: {DEFAULT_EXCEL_PATH}")
+        
+    raw_data = pd.read_excel(DEFAULT_EXCEL_PATH)
+    cleaned_df, clean_report = clean_data(raw_data, impute_method="median", outlier_action="cap")
+    
+    cols = cleaned_df.columns.tolist()
+    district_col = next((c for c in cols if c.lower() in ["district", "dist"]), None)
+    state_col = next((c for c in cols if c.lower() in ["state", "st"]), None)
+    
+    exclude_keywords = [
+        "latitude", "longitude", "lat", "lon", "lng", "co-ordinate", "coordinate",
+        "s. no.", "s.no.", "sno", "serial", "year", "location", "s.no", "serial number"
+    ]
+    exclude_cols = [district_col, state_col]
+    for c in cols:
+        c_l = c.lower()
+        if any(kw in c_l for kw in exclude_keywords):
+            if c not in exclude_cols:
+                exclude_cols.append(c)
+                
+    water_cols = [c for c in cols if c not in exclude_cols and pd.api.types.is_numeric_dtype(cleaned_df[c])]
+    
+    pca_results = run_pca_analysis(cleaned_df, water_cols)
+    risk_df, risk_weights = calculate_water_quality_risk_index(pca_results, cleaned_df)
+    
+    return risk_df, clean_report, pca_results, risk_weights, water_cols, district_col, state_col
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    """Distance between two coordinates in kilometers."""
+    radius_km = 6371.0
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    return 2 * radius_km * np.arcsin(np.sqrt(a))
+
+
+def find_safer_nearby_districts(df, active_row, district_col, state_col, limit=4):
+    lat_col = next((c for c in df.columns if c.lower() in ["latitude", "lat"]), None)
+    lon_col = next((c for c in df.columns if c.lower() in ["longitude", "lon", "lng"]), None)
+    if not lat_col or not lon_col or pd.isnull(active_row.get(lat_col)) or pd.isnull(active_row.get(lon_col)):
+        return pd.DataFrame()
+
+    nearby = df[df[district_col] != active_row[district_col]].copy()
+    nearby = nearby[nearby["Risk Score"] < active_row["Risk Score"]]
+    if nearby.empty:
+        return pd.DataFrame()
+
+    nearby["Distance Km"] = haversine_km(
+        active_row[lat_col],
+        active_row[lon_col],
+        nearby[lat_col].astype(float),
+        nearby[lon_col].astype(float),
+    )
+    nearby["Nearby Rank"] = nearby["Risk Score"] + (nearby["Distance Km"] / 50.0)
+    return nearby.sort_values(["Nearby Rank", "Risk Score"]).head(limit)[
+        [district_col, state_col, "Distance Km", "Risk Score", "Risk Category"]
+    ]
+
+
+def get_pca_contributions(df, active_row, pca_results, risk_weights):
+    """
+    Computes the contribution percentage of each parameter to the WQRI score of the active district,
+    based on its standardized z-scores and composite PCA loadings.
+    """
+    pos = df.index.get_loc(active_row.name)
+    std_vals = pca_results["standardized_data"][pos]
+    
+    loadings = pca_results["loadings"]
+    prepared_features = pca_results["prepared_features"]
+    feature_names = prepared_features.columns.tolist()
+    
+    # Calculate composite loadings
+    composite_loadings = np.zeros(len(feature_names))
+    pc_keys = list(risk_weights.keys())
+    pc_w = list(risk_weights.values())
+    
+    for i, pc in enumerate(pc_keys):
+        w = pc_w[i]
+        composite_loadings += loadings[pc].values * w
+        
+    # Element-wise contribution = std_val * composite_loading
+    contributions = std_vals * composite_loadings
+    
+    # Filter for parameters contributing to elevated risk (> 0)
+    contrib_list = []
+    for idx, feat in enumerate(feature_names):
+        clean_name = feat.split(" (")[0]
+        # Clean up common representations like "pH" or "EC"
+        if clean_name.lower() == "ph":
+            clean_name = "pH Deviation"
+        elif clean_name.lower() == "ec":
+            clean_name = "Electrical Conductivity"
+        val = contributions[idx]
+        if val > 0:
+            contrib_list.append((clean_name, val))
+            
+    # Fallback if no positive contribution (e.g. pristine water, z-scores negative)
+    if not contrib_list:
+        for idx, feat in enumerate(feature_names):
+            clean_name = feat.split(" (")[0]
+            if clean_name.lower() == "ph":
+                clean_name = "pH Deviation"
+            elif clean_name.lower() == "ec":
+                clean_name = "Electrical Conductivity"
+            contrib_list.append((clean_name, max(0.001, std_vals[idx])))
+            
+    # Sort by contribution descending
+    contrib_list.sort(key=lambda x: x[1], reverse=True)
+    
+    # Normalize to percentages
+    total = sum(c[1] for c in contrib_list)
+    percentage_contribs = []
+    for name, val in contrib_list:
+        pct = (val / total) * 100 if total > 0 else 0.0
+        percentage_contribs.append((name, pct))
+        
+    return percentage_contribs[:3] # Return top 3
+
+
+def render_treatment_html(treatment_text):
+    # Default values in case parsing fails
+    concern = "Elevated chemical levels exceed limits"
+    treatment = "Standard water filtration or Reverse Osmosis"
+    advice = "Avoid raw drinking water. Filter or boil before consumption."
+    severity = "Moderate"
+    
+    # Parse lines
+    lines = [line.strip() for line in treatment_text.split("\n") if ":" in line]
+    for line in lines:
+        if ":" in line:
+            parts = line.split(":", 1)
+            k = parts[0].replace("**", "").replace("*", "").strip().lower()
+            v = parts[1].replace("**", "").replace("*", "").strip()
+            if "concern" in k:
+                concern = v
+            elif "treatment" in k:
+                treatment = v
+            elif "advice" in k:
+                advice = v
+            elif "severity" in k:
+                severity = v
+                
+    # Determine badge color
+    severity_lower = severity.lower()
+    if "critical" in severity_lower or "immediate" in severity_lower:
+        badge_bg = "rgba(220, 38, 38, 0.2)"
+        badge_fg = "#fca5a5"
+    elif "high" in severity_lower or "moderate" in severity_lower or "requires" in severity_lower:
+        badge_bg = "rgba(217, 119, 6, 0.2)"
+        badge_fg = "#fde68a"
+    else:
+        badge_bg = "rgba(22, 163, 74, 0.2)"
+        badge_fg = "#a7f3d0"
+        
+    return clean_html(f"""
+    <div class="treatment-card">
+        <div class="section-kicker">Treatment Advice</div>
+        <div class="section-title" style="font-size: 1.25rem;">What should you do?</div>
+        <div style="margin-top: 18px; display: flex; flex-direction: column; gap: 12px;">
+            <div>
+                <span class="info-label">Primary Concern</span>
+                <div style="color: #ffffff; font-weight: 650; font-size: 0.92rem; margin-top: 2px;">{concern}</div>
+            </div>
+            <div>
+                <span class="info-label">Recommended Treatment</span>
+                <div style="color: #60a5fa; font-weight: 650; font-size: 0.92rem; margin-top: 2px;">{treatment}</div>
+            </div>
+            <div>
+                <span class="info-label">Household Action</span>
+                <div style="color: #94a3b8; font-size: 0.85rem; line-height: 1.45; margin-top: 2px;">{advice}</div>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06);">
+                <span class="info-label">Severity Level</span>
+                <span class="insight-badge" style="background-color: {badge_bg}; color: {badge_fg}; font-size: 0.72rem; padding: 4px 10px; border-radius: 6px; font-weight: 700; text-transform: uppercase;">{severity}</span>
+            </div>
+        </div>
+    </div>
+    """)
+
+
+# Silent database launch
+try:
+    risk_df, clean_report, pca_results, risk_weights, water_cols, district_col, state_col = initialize_system_database()
+except Exception as e:
+    st.error(f"System Ingestion Failure: {e}")
+    st.stop()
+
+# Initialize session state for searched or detected district & API key
+DEFAULT_NVIDIA_KEY = "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"
+
+if "active_district" not in st.session_state:
+    st.session_state.active_district = "Salem" # default starting district
+
+if "nvidia_api_key" not in st.session_state:
+    st.session_state.nvidia_api_key = DEFAULT_NVIDIA_KEY
+
+# ----------------- PARSE ROUTING QUERY PARAMETERS -----------------
+# 1. Hidden parent-child DOM communication text input
+st.markdown("""
+    <style>
+    /* Visually hide the communication input container while keeping it interactive for DOM events */
+    div[data-testid="stTextInput"]:has(input[placeholder="hidden_locator_comm"]),
+    div[data-testid="stTextInput"]:has(input[aria-label="hidden_locator_comm"]),
+    div.st-key-hidden_comm_input {
+        position: absolute !important;
+        opacity: 0 !important;
+        width: 0 !important;
+        height: 0 !important;
+        pointer-events: none !important;
+        overflow: hidden !important;
+        z-index: -9999 !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+if "hidden_comm_input" in st.session_state and st.session_state.hidden_comm_input:
+    cleaned_search = st.session_state.hidden_comm_input.strip()
+    if cleaned_search.lower().startswith("coords:"):
+        try:
+            coord_part = cleaned_search.split(":", 1)[1]
+            lat_str, lon_str = coord_part.split(",", 1)
+            user_lat = float(lat_str)
+            user_lon = float(lon_str)
+            
+            # Find nearest district in risk_df
+            lat_col = next((c for c in risk_df.columns if c.lower() in ["latitude", "lat"]), None)
+            lon_col = next((c for c in risk_df.columns if c.lower() in ["longitude", "lon", "lng"]), None)
+            
+            if lat_col and lon_col:
+                geo_df = risk_df.dropna(subset=[lat_col, lon_col])
+                distances = haversine_km(user_lat, user_lon, geo_df[lat_col].astype(float), geo_df[lon_col].astype(float))
+                min_idx = distances.idxmin()
+                nearest_district = geo_df.loc[min_idx, district_col]
+                nearest_state = geo_df.loc[min_idx, state_col]
+                nearest_dist = distances.loc[min_idx]
+                
+                st.session_state.active_district = nearest_district
+                if nearest_dist > 500:
+                    st.session_state.state_alert = f"Detected location is outside local region. Showing nearest registry district: **{nearest_district}** ({nearest_state}), approx. {nearest_dist:.0f} km away."
+                else:
+                    st.session_state.state_alert = f"Location matched to nearest district: **{nearest_district}** ({nearest_state})."
+            else:
+                st.session_state.state_alert = "Coordinate mapping columns missing in database."
+        except Exception as ex:
+            st.session_state.state_alert = f"Error matching coordinates: {ex}"
+    else:
+        cleaned_search_lower = cleaned_search.lower()
+        dist_match = risk_df[risk_df[district_col].str.lower() == cleaned_search_lower]
+        if not dist_match.empty:
+            st.session_state.active_district = dist_match.iloc[0][district_col]
+        else:
+            state_match = risk_df[risk_df[state_col].str.lower() == cleaned_search_lower]
+            if not state_match.empty:
+                state_dists = risk_df[risk_df[state_col].str.lower() == cleaned_search_lower].sort_values(by="Risk Score", ascending=False)
+                st.session_state.active_district = state_dists.iloc[0][district_col]
+                st.session_state.state_alert = f"Showing highest risk district in **{state_dists.iloc[0][state_col]}**."
+            else:
+                partial_match = risk_df[risk_df[district_col].str.lower().str.contains(cleaned_search_lower)]
+                if not partial_match.empty:
+                    st.session_state.active_district = partial_match.iloc[0][district_col]
+                else:
+                    st.session_state.state_alert = f"No match found for '**{cleaned_search}**'. Please check spelling and try again."
+                
+    del st.session_state["hidden_comm_input"]
+    st.query_params["search"] = st.session_state.active_district
+    st.rerun()
+
+# Now instantiate the text input widget. It will be empty on the new rerun.
+hidden_query = st.text_input("hidden_locator_comm", key="hidden_comm_input", label_visibility="collapsed", placeholder="hidden_locator_comm")
+
+# 2. Check for search string passed via URL query parameter (from the custom HTML search form)
+query_params = st.query_params
+if "search" in query_params:
+    search_val = query_params["search"]
+    cleaned_search = search_val.strip().lower()
+    
+    # Check if matches district name
+    dist_match = risk_df[risk_df[district_col].str.lower() == cleaned_search]
+    if not dist_match.empty:
+        st.session_state.active_district = dist_match.iloc[0][district_col]
+    else:
+        # Check if matches state name
+        state_match = risk_df[risk_df[state_col].str.lower() == cleaned_search]
+        if not state_match.empty:
+            state_dists = risk_df[risk_df[state_col].str.lower() == cleaned_search].sort_values(by="Risk Score", ascending=False)
+            st.session_state.active_district = state_dists.iloc[0][district_col]
+            st.session_state.state_alert = f"Showing highest risk district in **{state_dists.iloc[0][state_col]}**."
+        else:
+            # Check partial district match
+            partial_match = risk_df[risk_df[district_col].str.lower().str.contains(cleaned_search)]
+            if not partial_match.empty:
+                st.session_state.active_district = partial_match.iloc[0][district_col]
+
+# Set active district query parameter back to keep URL aligned
+st.query_params["search"] = st.session_state.active_district
+
+# ----------------- BRANDING HEADER -----------------
+st.markdown("""
+    <div class="navbar">
+        <div class="brand">
+            <span>🛡️ GroundWater Guardian</span>
+            <span class="brand-sub">India</span>
+        </div>
+        <nav class="nav-links">
+            <a href="#home">Home</a>
+            <a href="#compare">Compare</a>
+            <a href="#health-risks">Health Risks</a>
+            <a href="#national-trends">National Trends</a>
+            <a href="#about">About</a>
+        </nav>
+    </div>
+""", unsafe_allow_html=True)
+
+# ----------------- SECTION 1: HERO SECTION -----------------
+st.markdown("""
+    <div id="home" class="hero-box anchor-offset">
+        <h1>Know Your Drinking Water Risk</h1>
+        <p>Instant groundwater safety assessment for Indian districts.</p>
+    </div>
+""", unsafe_allow_html=True)
+
+# Centered Custom Search Container using 100% custom HTML form target parent redirections
+col_left_space, col_search_main, col_right_space = st.columns([0.3, 3.4, 0.3])
+
+with col_search_main:
+    # Render modern custom HTML search form & client-side geolocation redirect
+    search_form_html = """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body {
+        margin: 0;
+        font-family: 'Inter', sans-serif;
+        background-color: transparent;
+    }
+    .search-form {
+        display: flex;
+        gap: 10px;
+        width: 100%;
+        margin-bottom: 12px;
+    }
+    .search-input {
+        flex-grow: 1;
+        padding: 12px 18px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background-color: rgba(17, 24, 39, 0.8);
+        color: #ffffff;
+        font-size: 0.95rem;
+        outline: none;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .search-input::placeholder {
+        color: #64748b;
+    }
+    .search-input:focus {
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+    }
+    .search-btn {
+        background-color: #3b82f6;
+        color: white;
+        font-weight: 600;
+        border: none;
+        border-radius: 12px;
+        padding: 12px 24px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        transition: background-color 0.2s;
+        white-space: nowrap;
+    }
+    .search-btn:hover {
+        background-color: #2563eb;
+    }
+    .geo-btn {
+        background-color: rgba(255, 255, 255, 0.05);
+        color: #cbd5e1;
+        font-weight: 600;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 12px 16px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        transition: background-color 0.2s, color 0.2s;
+        white-space: nowrap;
+    }
+    .geo-btn:hover {
+        background-color: rgba(255, 255, 255, 0.1);
+        color: #ffffff;
+    }
+    </style>
+    
+    <form class="search-form" onsubmit="event.preventDefault(); submitSearch();">
+        <input type="text" id="searchInput" class="search-input" placeholder="Search district name (e.g. Salem, Patna...)" required />
+        <button type="submit" class="search-btn">🔍 Search</button>
+        <button type="button" class="geo-btn" onclick="geoLocate()">📍 Locate Me</button>
+    </form>
+    
+    <script>
+    function sendValueToStreamlit(val) {
+        try {
+            const parentDoc = window.parent.document;
+            
+            // Primary: Find input by unique Streamlit widget key class wrapper
+            let input = parentDoc.querySelector('.st-key-hidden_comm_input input');
+            
+            // Fallback 1: Try finding input by label link (most robust in Streamlit standard layout)
+            if (!input) {
+                const label = Array.from(parentDoc.querySelectorAll('label')).find(el => el.textContent && el.textContent.trim() === 'hidden_locator_comm');
+                if (label) {
+                    const inputId = label.getAttribute('for');
+                    if (inputId) {
+                        input = parentDoc.getElementById(inputId);
+                    }
+                }
+            }
+            
+            // Fallback 2: Try placeholder/aria-label/name search
+            if (!input) {
+                input = Array.from(parentDoc.querySelectorAll('input')).find(el => 
+                    el.getAttribute('aria-label') === 'hidden_locator_comm' || 
+                    el.placeholder === 'hidden_locator_comm' ||
+                    el.name === 'hidden_locator_comm'
+                );
+            }
+            
+            if (input) {
+                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                nativeInputValueSetter.call(input, val);
+                
+                // Dispatch input and change events
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                // Focus, trigger Enter keys, and blur to force Streamlit rerun
+                input.focus();
+                input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                input.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                input.blur();
+                
+                return true;
+            }
+        } catch (e) {
+            console.error("DOM communication failed", e);
+        }
+        
+        // Fallback to URL query parameter reload if DOM access is blocked
+        window.parent.postMessage({ type: 'navigate', url: '?search=' + encodeURIComponent(val) }, '*');
+    }
+
+    function submitSearch() {
+        const val = document.getElementById('searchInput').value;
+        sendValueToStreamlit(val);
+    }
+    
+    async function geoLocate() {
+        const locateBtn = document.querySelector('.geo-btn');
+        const originalText = locateBtn.innerHTML;
+        locateBtn.innerHTML = "⌛ Locating...";
+        locateBtn.disabled = true;
+
+        // Try browser GPS first
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                async (position) => {
+                    const lat = position.coords.latitude;
+                    const lon = position.coords.longitude;
+                    sendValueToStreamlit(`coords:${lat},${lon}`);
+                    locateBtn.innerHTML = originalText;
+                    locateBtn.disabled = false;
+                },
+                async (error) => {
+                    console.warn("HTML5 Geolocation failed/denied, trying IP coordinates...", error);
+                    await geoLocateIP(locateBtn, originalText);
+                },
+                { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+            );
+        } else {
+            await geoLocateIP(locateBtn, originalText);
+        }
+    }
+
+    async function geoLocateIP(locateBtn, originalText) {
+        const urls = [
+            { url: 'https://ipinfo.io/json', locKey: 'loc' },
+            { url: 'https://ipapi.co/json/', latKey: 'latitude', lonKey: 'longitude', checkError: true },
+            { url: 'https://geolocation-db.com/json/', latKey: 'latitude', lonKey: 'longitude' },
+            { url: 'https://freeipapi.com/api/json', latKey: 'latitude', lonKey: 'longitude' }
+        ];
+
+        for (const item of urls) {
+            try {
+                const res = await fetch(item.url);
+                if (!res.ok) continue;
+                const data = await res.json();
+                if (item.checkError && (data.error || data.reason === 'RateLimited')) {
+                    continue;
+                }
+                
+                // Case 1: IP returns 'loc' (like ipinfo.io: "lat,lon")
+                if (item.locKey && data[item.locKey]) {
+                    sendValueToStreamlit(`coords:${data[item.locKey]}`);
+                    locateBtn.innerHTML = originalText;
+                    locateBtn.disabled = false;
+                    return;
+                }
+                
+                // Case 2: IP returns explicit lat/lon
+                const lat = data.latitude || data[item.latKey];
+                const lon = data.longitude || data[item.lonKey];
+                if (lat && lon) {
+                    sendValueToStreamlit(`coords:${lat},${lon}`);
+                    locateBtn.innerHTML = originalText;
+                    locateBtn.disabled = false;
+                    return;
+                }
+                
+                // Case 3: Fallback to city name string matching
+                const city = data.city || data.cityName;
+                if (city) {
+                    sendValueToStreamlit(city);
+                    locateBtn.innerHTML = originalText;
+                    locateBtn.disabled = false;
+                    return;
+                }
+            } catch (err) {
+                console.warn("Failed IP location check on " + item.url, err);
+            }
+        }
+
+        locateBtn.innerHTML = originalText;
+        locateBtn.disabled = false;
+        alert("Location lookup failed. Please search for your district manually.");
+    }
+    </script>
+    """
+    components.html(search_form_html, height=55)
+    
+    # State redirect alert
+    if "state_alert" in st.session_state and st.session_state.state_alert:
+        st.markdown(f'<div class="state-alert-custom">{st.session_state.state_alert}</div>', unsafe_allow_html=True)
+        del st.session_state.state_alert 
+
+# ----------------- SECTION 2: SAFETY ASSESSMENT & DETAILS -----------------
+active_row = risk_df[risk_df[district_col] == st.session_state.active_district].iloc[0]
+hazards, risk_tier, dom_hazard, safety_status = analyze_district_health_hazards(active_row, water_cols)
+
+score = active_row["Risk Score"]
+
+# Mapping accent colors & badges based on risk level
+if safety_status == "Immediate Attention Required":
+    accent_color = "#dc2626"      # Red
+    bg_light = "#fee2e2"          # Soft Red
+    text_color = "#991b1b"        # Dark Red
+    badge_label = "🔴 CRITICAL RISK"
+elif safety_status == "Requires Filtration":
+    accent_color = "#d97706"      # Orange
+    bg_light = "#fef3c7"          # Soft Orange
+    text_color = "#92400e"        # Dark Orange
+    badge_label = "🟡 MODERATE RISK"
+else:
+    accent_color = "#16a34a"      # Green
+    bg_light = "#d1fae5"          # Soft Green
+    text_color = "#065f46"        # Dark Green
+    badge_label = "🟢 LOW RISK"
+
+primary_exceedance = active_row['Major Contributors'].split(', ')[0] if pd.notnull(active_row['Major Contributors']) else 'Within Standard Limits'
+
+# Interventions mapping
+ex_lower = active_row['Major Contributors'].lower() if pd.notnull(active_row['Major Contributors']) else ""
+if "fluoride" in ex_lower:
+    recomm = "Deploy domestic defluoridation systems (Activated Alumina). Avoid raw groundwater."
+elif "arsenic" in ex_lower:
+    recomm = "Prioritize deep tubewells tapping aquifers below clay boundaries."
+elif "uranium" in ex_lower:
+    recomm = "Deploy certified Reverse Osmosis (RO) filtration systems."
+elif "nitrate" in ex_lower:
+    recomm = "Avoid shallow well water for infant consumption (Blue Baby Syndrome risk)."
+else:
+    recomm = "Standard household water filtration (RO/carbon) is sufficient."
+
+# Dashboard Columns
+col_card, col_details = st.columns([1, 1.25], gap="large")
+
+with col_card:
+    st.markdown(f"""
+        <div class="result-container" style="padding:0; margin:0;">
+            <div class="result-card" style="border-top: 6px solid {accent_color}; max-width: 100%; width: 100%; box-sizing: border-box; margin:0;">
+                <div class="result-category-badge" style="background-color: {bg_light}; color: {text_color};">
+                    {badge_label}
+                </div>
+                <div class="result-location">{active_row[district_col]}</div>
+                <div class="result-state">{active_row[state_col]}, India</div>
+                <div class="score-title">Water Risk Score</div>
+                <div class="score-display">
+                    <span class="score-val">{score:.0f}</span>
+                    <span class="score-max">/ 100</span>
+                </div>
+                <div class="result-status-badge" style="background-color: {bg_light}; color: {text_color};">
+                    {safety_status}
+                </div>
+                <div class="result-info-grid">
+                    <div class="info-row">
+                        <span class="info-label">Primary Concern</span>
+                        <span class="info-val">{primary_exceedance}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Recommendation</span>
+                        <span class="info-val">{recomm}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Personal Printable Report Card (PDF download wrapper)
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            pdf_path = tmp.name
+        generate_district_pdf_report(active_row, water_cols, pdf_path)
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+        st.write("") # small spacing
+        st.download_button(
+            label="💾 Download Water Safety Report Card (PDF)",
+            data=pdf_bytes,
+            file_name=f"{st.session_state.active_district}_Water_Safety_Report_Card.pdf",
+            mime="application/pdf",
+            key="pdf_download_top"
+        )
+        os.unlink(pdf_path)
+    except Exception as pdf_error:
+        pass
+
+with col_details:
+    col_breakdown, col_treatment = st.columns(2)
+    
+    with col_breakdown:
+        # Risk Contributors Breakdown using Z-score math
+        percentage_contribs = get_pca_contributions(risk_df, active_row, pca_results, risk_weights)
+        contrib_html = ""
+        for name, pct in percentage_contribs:
+            contrib_html += f"""
+            <div style="margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 4px;">
+                    <span style="font-weight: 600; color: #cbd5e1;">{name}</span>
+                    <span style="font-weight: 700; color: {accent_color};">{pct:.1f}%</span>
+                </div>
+                <div style="background-color: rgba(255, 255, 255, 0.05); height: 6px; border-radius: 3px; overflow: hidden;">
+                    <div style="background-color: {accent_color}; width: {pct}%; height: 100%; border-radius: 3px;"></div>
+                </div>
+            </div>
+            """
+        if not contrib_html:
+            contrib_html = "<div style='color: #64748b; font-size: 0.85rem; margin-top: 10px;'>No significant chemical contaminants detected. Water is within standard guidelines.</div>"
+            
+        breakdown_card_html = f"""
+        <div class="nearby-card" style="height: 100%;">
+            <div class="section-kicker">Risk Attribution</div>
+            <div class="section-title" style="font-size: 1.2rem;">Why is my score high?</div>
+            <div style="margin-top: 15px;">
+                {contrib_html}
+            </div>
+        </div>
+        """
+        st.markdown(clean_html(breakdown_card_html), unsafe_allow_html=True)
+        
+    with col_treatment:
+        # AI Treatment Advice Card
+        treatment_cache_key = f"treatment_{active_row[district_col]}"
+        if treatment_cache_key not in st.session_state:
+            with st.spinner("Preparing treatment guidance..."):
+                st.session_state[treatment_cache_key] = generate_treatment_recommendation(
+                    active_row,
+                    water_cols,
+                    hazards,
+                    api_key=st.session_state.nvidia_api_key
+                )
+        treatment_text = st.session_state[treatment_cache_key]
+        treatment_card_html = render_treatment_html(treatment_text)
+        st.markdown(treatment_card_html, unsafe_allow_html=True)
+
+    # Safer Alternatives Card (full width of col_details)
+    safer_nearby = find_safer_nearby_districts(risk_df, active_row, district_col, state_col)
+    nearby_html = ""
+    if safer_nearby.empty:
+        nearby_html = """
+        <div class="nearby-card" style="margin-top: 20px;">
+            <div class="section-kicker">Safer Alternatives</div>
+            <div class="section-title" style="font-size: 1.2rem;">Nearest lower-risk regions</div>
+            <div style="margin-top: 15px; color: #94a3b8; font-size: 0.85rem;">No safer nearby districts were found in the database.</div>
+        </div>
+        """
+    else:
+        rows_html = ""
+        for _, row in safer_nearby.iterrows():
+            rows_html += f"""
+            <div class="nearby-row">
+                <div>
+                    <div class="nearby-name">{row[district_col]}</div>
+                    <div class="nearby-meta">{row[state_col]}</div>
+                </div>
+                <div class="nearby-meta">{row['Distance Km']:.0f} km</div>
+                <div class="nearby-meta" style="color: #16a34a; font-weight: 700;">Score {row['Risk Score']:.0f}</div>
+            </div>
+            """
+        nearby_html = f"""
+        <div class="nearby-card" style="margin-top: 20px;">
+            <div class="section-kicker">Safer Alternatives</div>
+            <div class="section-title" style="font-size: 1.2rem;">Nearest lower-risk regions</div>
+            <div style="margin-top: 10px;">
+                {rows_html}
+            </div>
+        </div>
+        """
+    st.markdown(clean_html(nearby_html), unsafe_allow_html=True)
+
+
+# ----------------- HEALTH HAZARDS & VULNERABILITY PROFILE -----------------
+st.markdown(f"""
+    <div id="health-risks" class="anchor-offset" style="margin-top:48px;">
+        <div class="section-kicker" style="text-align:center;">Vulnerability Profile</div>
+        <div class="section-title" style="text-align:center;">Chemical Contamination Risks in {active_row[district_col]}</div>
+        <p class="section-copy" style="text-align:center;">Specific parameters exceeding standard guidelines and their health associations.</p>
+    </div>
+""", unsafe_allow_html=True)
+
+if hazards:
+    insight_cols = st.columns(min(3, len(hazards)))
+    for idx, hz in enumerate(hazards[:3]): # top 3
+        with insight_cols[idx % 3]:
+            st.markdown(f"""
+                <div class="insight-card">
+                    <div class="insight-title">{hz['parameter']}</div>
+                    <div class="insight-label">Status</div>
+                    <div class="insight-val">Above Recommended Limit</div>
+                    <div class="insight-label">Associated Concern</div>
+                    <div class="insight-val">{hz['title']}</div>
+                    <div class="insight-label">Severity</div>
+                    <div class="insight-badge exceeded">{hz['severity']} Concentration</div>
+                </div>
+            """, unsafe_allow_html=True)
+else:
+    col_ins_l, col_ins_c, col_ins_r = st.columns([1, 2, 1])
+    with col_ins_c:
+        st.markdown(f"""
+            <div class="insight-card" style="text-align:center; padding:30px;">
+                <div class="insight-title" style="color:#16a34a;">🟢 All Parameters Within Guidelines</div>
+                <div class="insight-val">Measured chemical parameters do not exceed standard acceptable guidelines in {active_row[district_col]}. General water supply poses low cumulative health risks.</div>
+            </div>
+        """, unsafe_allow_html=True)
+
+
+# ----------------- SECTION 6: INTERACTIVE INDIA MAP -----------------
+st.markdown("""
+    <div id="map-section" class="anchor-offset" style="margin-top:48px;">
+        <div class="section-kicker" style="text-align:center;">Interactive Map</div>
+        <div class="section-title" style="text-align:center;">National Water Safety Explorer</div>
+        <p class="section-copy" style="text-align:center;">Click on any district on the map to update the safety assessment and analysis details above.</p>
+    </div>
+""", unsafe_allow_html=True)
+
+with st.spinner("Rendering interactive map..."):
+    fig_map = render_district_map(
+        risk_df,
+        district_col=district_col,
+        state_col=state_col,
+        score_col="Risk Score",
+        category_col="Risk Category"
+    )
+    fig_map.update_layout(height=650, margin=dict(l=0, r=0, t=10, b=10))
+    event_map = st.plotly_chart(fig_map, use_container_width=True, on_select="rerun")
+
+if event_map and "selection" in event_map and "points" in event_map["selection"] and len(event_map["selection"]["points"]) > 0:
+    point = event_map["selection"]["points"][0]
+    clicked_district = None
+    if "hovertext" in point:
+        clicked_district = point["hovertext"]
+    elif "location" in point:
+        clicked_district = point["location"]
+    elif "customdata" in point and len(point["customdata"]) > 0:
+        clicked_district = point["customdata"][0]
+        
+    if clicked_district:
+        dist_match = risk_df[risk_df[district_col].str.lower() == clicked_district.strip().lower()]
+        if not dist_match.empty:
+            st.session_state.active_district = dist_match.iloc[0][district_col]
+            st.query_params["search"] = st.session_state.active_district
+            st.rerun()
+
+
+# ----------------- SECTION 8: DISTRICT COMPARISON -----------------
+st.markdown("""
+    <div id="compare" class="anchor-offset" style="margin-top:48px;">
+        <div class="section-kicker" style="text-align:center;">Comparison Tool</div>
+        <div class="section-title" style="text-align:center;">Side-by-Side District Comparison</div>
+        <p class="section-copy" style="text-align:center;">Select any two districts to compare risk indexes and standard chemical deviations.</p>
+    </div>
+""", unsafe_allow_html=True)
+
+col_comp_sel1, col_comp_sel2 = st.columns(2)
+with col_comp_sel1:
+    comp_state1 = st.selectbox("Select State 1", sorted(risk_df[state_col].unique()))
+    comp_dist1 = st.selectbox("Select District 1", sorted(risk_df[risk_df[state_col] == comp_state1][district_col].unique()))
+with col_comp_sel2:
+    comp_state2 = st.selectbox("Select State 2", sorted(risk_df[state_col].unique()))
+    comp_dist2 = st.selectbox("Select District 2", sorted(risk_df[risk_df[state_col] == comp_state2][district_col].unique()))
+
+if comp_dist1 != comp_dist2:
+    col_c1, col_c_radar, col_c2 = st.columns([1, 1.8, 1])
+    
+    row1 = risk_df[risk_df[district_col] == comp_dist1].iloc[0]
+    row2 = risk_df[risk_df[district_col] == comp_dist2].iloc[0]
+    
+    # Left Card
+    with col_c1:
+        st.markdown(f"""
+            <div class="comp-card" style="margin-top:20px; height:100%;">
+                <div class="comp-name">{row1[district_col]}</div>
+                <div style="font-size:0.8rem; color:#64748b; font-weight:600;">{row1[state_col]}</div>
+                <div class="comp-score">{row1['Risk Score']:.0f}</div>
+                <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#94a3b8;">Water Risk Score</div>
+                <div style="font-size:0.85rem; font-weight:700; color:#cbd5e1; margin-top:15px; background:rgba(255,255,255,0.05); padding:6px; border-radius:6px;">{row1['Risk Category']}</div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+    # Right Card
+    with col_c2:
+        st.markdown(f"""
+            <div class="comp-card" style="margin-top:20px; height:100%;">
+                <div class="comp-name">{row2[district_col]}</div>
+                <div style="font-size:0.8rem; color:#64748b; font-weight:600;">{row2[state_col]}</div>
+                <div class="comp-score">{row2['Risk Score']:.0f}</div>
+                <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#94a3b8;">Water Risk Score</div>
+                <div style="font-size:0.85rem; font-weight:700; color:#cbd5e1; margin-top:15px; background:rgba(255,255,255,0.05); padding:6px; border-radius:6px;">{row2['Risk Category']}</div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+    # Radar Chart
+    with col_c_radar:
+        radar_features = []
+        for term in ["ph", "ec (", "f (", "no3", "hardness", "fe (", "as (", "u ("]:
+            match = next((c for c in water_cols if term in c.lower()), None)
+            if match:
+                radar_features.append(match)
+                
+        if len(radar_features) >= 3:
+            r1_vals = []
+            r2_vals = []
+            labels = []
+            for f in radar_features:
+                labels.append(f.split(" (")[0])
+                _, limits = match_bis_standard(f)
+                if limits:
+                    acc = limits[0]
+                    if f.lower() == "ph":
+                        r1_vals.append(abs(row1[f] - 7.0) / 1.5)
+                        r2_vals.append(abs(row2[f] - 7.0) / 1.5)
+                    else:
+                        r1_vals.append(row1[f] / acc if acc > 0 else 0)
+                        r2_vals.append(row2[f] / acc if acc > 0 else 0)
+                else:
+                    r1_vals.append(0)
+                    r2_vals.append(0)
+                    
+            r1_vals.append(r1_vals[0])
+            r2_vals.append(r2_vals[0])
+            labels.append(labels[0])
+            
+            fig_r = go.Figure()
+            fig_r.add_trace(go.Scatterpolar(
+                r=r1_vals, theta=labels, fill='toself', name=comp_dist1,
+                line_color="#3b82f6", fillcolor="rgba(59,130,246,0.08)"
+            ))
+            fig_r.add_trace(go.Scatterpolar(
+                r=r2_vals, theta=labels, fill='toself', name=comp_dist2,
+                line_color="#dc2626", fillcolor="rgba(220,38,38,0.08)"
+            ))
+            fig_r.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, max(max(r1_vals), max(r2_vals), 1.5) * 1.1])),
+                showlegend=False,
+                height=300,
+                margin=dict(l=35, r=35, t=10, b=10),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
+            )
+            st.plotly_chart(fig_r, use_container_width=True)
+
+# ----------------- SECTION 7: FLOATING AI ADVISOR -----------------
+# Initialize chatbot state
+if "chat_expanded" not in st.session_state:
+    st.session_state.chat_expanded = False
+
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = [
+        {"role": "assistant", "content": f"Hello! I am your AI Advisor. Ask me anything about groundwater safety in **{st.session_state.active_district}** or compare surrounding regions."}
+    ]
+
+# Inject floating CSS rules
+st.markdown("""
+    <style>
+    /* Styling for the floating FAB when collapsed */
+    div[data-testid="stVerticalBlock"]:has(div.floating-chat-fab):not(:has(div[data-testid="stVerticalBlock"])) {
+        position: fixed !important;
+        bottom: 24px !important;
+        right: 24px !important;
+        left: auto !important;
+        width: 60px !important;
+        height: 60px !important;
+        z-index: 999999 !important;
+        background: transparent !important;
+        border: none !important;
+        padding: 0 !important;
+    }
+    div[data-testid="stVerticalBlock"]:has(div.floating-chat-fab):not(:has(div[data-testid="stVerticalBlock"])) button {
+        background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
+        color: white !important;
+        border-radius: 50% !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        width: 60px !important;
+        height: 60px !important;
+        box-shadow: 0 8px 24px rgba(59, 130, 246, 0.5) !important;
+        font-size: 24px !important;
+        cursor: pointer !important;
+        transition: transform 0.2s !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    div[data-testid="stVerticalBlock"]:has(div.floating-chat-fab):not(:has(div[data-testid="stVerticalBlock"])) button:hover {
+        transform: scale(1.05) !important;
+        border-color: #3b82f6 !important;
+    }
+    
+    /* Styling for the expanded floating container */
+    div[data-testid="stVerticalBlock"]:has(div.floating-chat-expanded):not(:has(div[data-testid="stVerticalBlock"])) {
+        position: fixed !important;
+        bottom: 24px !important;
+        right: 24px !important;
+        left: auto !important;
+        width: 380px !important;
+        z-index: 999999 !important;
+        background-color: #0f172a !important; /* Slate 900 */
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        border-radius: 20px !important;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6) !important;
+        padding: 12px !important;
+        display: flex !important;
+        flex-direction: column !important;
+    }
+    
+    .suggestion-chip button {
+        background-color: rgba(255, 255, 255, 0.04) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 20px !important;
+        padding: 4px 10px !important;
+        font-size: 0.72rem !important;
+        color: #cbd5e1 !important;
+        cursor: pointer !important;
+        transition: background-color 0.2s !important;
+        margin: 2px !important;
+        display: inline-block !important;
+        width: auto !important;
+    }
+    .suggestion-chip button:hover {
+        background-color: rgba(255, 255, 255, 0.08) !important;
+        color: #ffffff !important;
+        border-color: #3b82f6 !important;
+    }
+    
+    .floating-input-col div[data-testid="stTextInput"] input {
+        border-radius: 10px !important;
+        padding: 6px 12px !important;
+        font-size: 0.8rem !important;
+        height: 32px !important;
+        background-color: #1e293b !important;
+        border: 1px solid rgba(255,255,255,0.08) !important;
+    }
+    .floating-submit-col button {
+        height: 32px !important;
+        padding: 0 12px !important;
+        font-size: 0.8rem !important;
+        border-radius: 10px !important;
+        width: 100% !important;
+        background-color: #3b82f6 !important;
+        color: #ffffff !important;
+        font-weight: 600 !important;
+        border: none !important;
+    }
+    .floating-submit-col button:hover {
+        background-color: #2563eb !important;
+    }
+    
+    .close-chat-btn button {
+        background: transparent !important;
+        border: 0 !important;
+        color: #94a3b8 !important;
+        font-size: 0.85rem !important;
+        padding: 0 !important;
+        margin-top: 10px !important;
+        cursor: pointer !important;
+        width: auto !important;
+        float: right;
+    }
+    .close-chat-btn button:hover {
+        color: #ffffff !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+if not st.session_state.chat_expanded:
+    with st.container():
+        st.markdown('<div class="floating-chat-fab"></div>', unsafe_allow_html=True)
+        if st.button("💬", key="expand_chat_btn"):
+            st.session_state.chat_expanded = True
+            st.rerun()
+else:
+    with st.container():
+        st.markdown('<div class="floating-chat-expanded"></div>', unsafe_allow_html=True)
+        
+        # 1. Header
+        col_hdr_title, col_hdr_btn = st.columns([4, 1])
+        with col_hdr_title:
+            st.markdown(f"""
+                <div style="padding: 0 0 5px 0;">
+                    <span style="font-weight: 800; font-size: 0.95rem; color: #ffffff; display: flex; align-items: center; gap: 6px;">
+                        🛡️ Advisor: {st.session_state.active_district}
+                    </span>
+                    <span style="font-size: 0.72rem; color: #94a3b8; display: block; margin-top: 1px;">AI Water Quality Assistant</span>
+                </div>
+            """, unsafe_allow_html=True)
+        with col_hdr_btn:
+            st.markdown('<div class="close-chat-btn"></div>', unsafe_allow_html=True)
+            if st.button("✕", key="close_chat_btn"):
+                st.session_state.chat_expanded = False
+                st.rerun()
+
+        # 2. Chat history thread
+        bubbles_html = ""
+        for msg in st.session_state.chat_history:
+            is_user = msg["role"] == "user"
+            bg_color = "rgba(59, 130, 246, 0.15)" if is_user else "rgba(255, 255, 255, 0.05)"
+            border_color = "rgba(59, 130, 246, 0.3)" if is_user else "rgba(255, 255, 255, 0.08)"
+            align_self = "flex-end" if is_user else "flex-start"
+            margin_left = "40px" if is_user else "0"
+            margin_right = "0" if is_user else "40px"
+            name = "You" if is_user else "Guardian Advisor"
+            avatar = "👤" if is_user else "🛡️"
+            
+            bubbles_html += f"""
+            <div style="
+                background-color: {bg_color};
+                border: 1px solid {border_color};
+                border-radius: 12px;
+                padding: 10px 12px;
+                font-size: 0.82rem;
+                color: #f1f5f9;
+                line-height: 1.4;
+                max-width: 90%;
+                margin-left: {margin_left};
+                margin-right: {margin_right};
+                align-self: {align_self};
+            ">
+                <div style="font-size: 0.65rem; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; display: flex; align-items: center; gap: 4px;">
+                    <span>{avatar}</span> <span>{name}</span>
+                </div>
+                <div>{msg["content"]}</div>
+            </div>
+            """
+            
+        st.markdown(f"""
+            <div class="chat-scroll-wrapper" style="
+                max-height: 250px;
+                overflow-y: auto;
+                padding: 10px 10px;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                border-top: 1px solid rgba(255, 255, 255, 0.06);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+                background-color: rgba(0, 0, 0, 0.15);
+                border-radius: 8px;
+            ">
+                {bubbles_html}
+            </div>
+            <script>
+                const container = document.querySelector('.chat-scroll-wrapper');
+                if (container) {{
+                    container.scrollTop = container.scrollHeight;
+                }}
+            </script>
+        """, unsafe_allow_html=True)
+        
+        # 3. Suggestion Chips
+        st.markdown("<div style='font-size: 0.7rem; font-weight:700; color:#64748b; margin-top:8px; margin-bottom:4px; text-transform:uppercase;'>Suggested Questions</div>", unsafe_allow_html=True)
+        col_chip1, col_chip2, col_chip3 = st.columns(3)
+        chip_clicked = None
+        with col_chip1:
+            st.markdown('<div class="suggestion-chip"></div>', unsafe_allow_html=True)
+            if st.button("Is water safe?", key="chip_safe"):
+                chip_clicked = f"Is the groundwater in {st.session_state.active_district} safe to drink?"
+        with col_chip2:
+            st.markdown('<div class="suggestion-chip"></div>', unsafe_allow_html=True)
+            if st.button("Filter advice", key="chip_filter"):
+                chip_clicked = f"What specific water filter should I buy for {st.session_state.active_district}?"
+        with col_chip3:
+            st.markdown('<div class="suggestion-chip"></div>', unsafe_allow_html=True)
+            if st.button("Compare nearby", key="chip_nearby"):
+                chip_clicked = f"Are there safer groundwater options near {st.session_state.active_district}?"
+
+        # 4. Input Form
+        with st.form("advisor_floating_form", clear_on_submit=True):
+            col_inp, col_sub = st.columns([3.2, 1])
+            with col_inp:
+                st.markdown('<div class="floating-input-col"></div>', unsafe_allow_html=True)
+                floating_prompt = st.text_input(
+                    "Ask advisor...",
+                    placeholder="Ask advisor...",
+                    label_visibility="collapsed",
+                    key="float_prompt_input"
+                )
+            with col_sub:
+                st.markdown('<div class="floating-submit-col"></div>', unsafe_allow_html=True)
+                float_submitted = st.form_submit_button("Send")
+                
+        user_query = None
+        if chip_clicked:
+            user_query = chip_clicked
+        elif float_submitted and floating_prompt.strip():
+            user_query = floating_prompt.strip()
+            
+        if user_query:
+            st.session_state.chat_history.append({"role": "user", "content": user_query})
+            with st.spinner("Analyzing..."):
+                response = answer_citizen_query(
+                    risk_df,
+                    user_query,
+                    st.session_state.active_district,
+                    water_cols,
+                    api_key=st.session_state.nvidia_api_key
+                )
+            st.session_state.chat_history.append({"role": "assistant", "content": response})
+            st.rerun()
+
+# ----------------- NATIONAL TRENDS -----------------
+st.markdown("<div style='margin-top:60px;'></div>", unsafe_allow_html=True)
+
+with st.expander("National Trends & Contaminant Explorer"):
+    st.markdown("""
+        <div id="national-trends" class="anchor-offset">
+            <div class="section-kicker">National Trends</div>
+            <div class="section-title">Registry statistics</div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    col_reg1, col_reg2 = st.columns(2)
+    with col_reg1:
+        st.markdown("##### Top 10 Most Affected Districts")
+        worst_tbl = risk_df.sort_values(by="Risk Score", ascending=False).head(10)[[district_col, state_col, "Risk Score", "Risk Category", "Major Contributors"]]
+        worst_tbl.columns = ["District", "State", "Water Risk Score", "Hazard Level", "Primary Contaminants"]
+        st.dataframe(worst_tbl, width="stretch", hide_index=True)
+    with col_reg2:
+        st.markdown("##### Top 10 Safest Districts")
+        safest_tbl = risk_df.sort_values(by="Risk Score", ascending=True).head(10)[[district_col, state_col, "Risk Score", "Risk Category", "Major Contributors"]]
+        safest_tbl.columns = ["District", "State", "Water Risk Score", "Hazard Level", "Primary Contaminants"]
+        st.dataframe(safest_tbl, width="stretch", hide_index=True)
+        
+    st.markdown("---")
+    st.markdown("#### National Chemical Maps")
+    
+    EXPLORER_PARAMS = {
+        "Fluoride": {"col": "F (mg/L)", "scale": "Oranges"},
+        "Arsenic": {"col": "As (ppb)", "scale": "Reds"},
+        "Uranium": {"col": "U (ppb)", "scale": "Purples"},
+        "Nitrate": {"col": "NO3", "scale": "Blues"},
+        "Iron": {"col": "Fe (ppm)", "scale": "YlOrBr"},
+        "Total Hardness": {"col": "Total Hardness", "scale": "Greys"},
+        "pH": {"col": "pH", "scale": "RdYlBu"}
+    }
+    
+    selected_param = st.selectbox("Select Contaminant Map:", list(EXPLORER_PARAMS.keys()))
+    p_info = EXPLORER_PARAMS[selected_param]
+    
+    with st.spinner(f"Drawing map for {selected_param}..."):
+        fig_p = render_parameter_map(
+            risk_df,
+            param_col=p_info['col'],
+            district_col=district_col,
+            state_col=state_col,
+            color_scale=p_info['scale']
+        )
+        event_p = st.plotly_chart(fig_p, width="stretch", on_select="rerun")
+        if event_p and "selection" in event_p and "points" in event_p["selection"] and len(event_p["selection"]["points"]) > 0:
+            point = event_p["selection"]["points"][0]
+            clicked_district = None
+            if "hovertext" in point:
+                clicked_district = point["hovertext"]
+            elif "location" in point:
+                clicked_district = point["location"]
+            elif "customdata" in point and len(point["customdata"]) > 0:
+                clicked_district = point["customdata"][0]
+                
+            if clicked_district:
+                dist_match = risk_df[risk_df[district_col].str.lower() == clicked_district.strip().lower()]
+                if not dist_match.empty:
+                    st.session_state.active_district = dist_match.iloc[0][district_col]
+                    st.query_params["search"] = st.session_state.active_district
+                    st.rerun()
+
+# Footer
+st.markdown("""
+    <div id="about" class="anchor-offset" style="text-align:center; font-size:0.8rem; color:#94a3b8; margin-top:60px; padding-bottom:40px;">
+        🛡️ GroundWater Guardian India Registry &copy; 2026. Data compiled from Central Ground Water Board (CGWB) chemical surveys.
+    </div>
+""", unsafe_allow_html=True)
