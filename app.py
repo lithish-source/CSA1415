@@ -1404,7 +1404,7 @@ if "chat_history" not in st.session_state:
 st.markdown("""
     <style>
     /* Styling for the floating FAB when collapsed */
-    div[data-testid="stVerticalBlock"]:has(div.floating-chat-fab):not(:has(div[data-testid="stVerticalBlock"])) {
+    div[data-testid="stVerticalBlock"]:has(> div > div.floating-chat-fab) {
         position: fixed !important;
         bottom: 24px !important;
         right: 24px !important;
@@ -1416,7 +1416,7 @@ st.markdown("""
         border: none !important;
         padding: 0 !important;
     }
-    div[data-testid="stVerticalBlock"]:has(div.floating-chat-fab):not(:has(div[data-testid="stVerticalBlock"])) button {
+    div[data-testid="stVerticalBlock"]:has(> div > div.floating-chat-fab) button {
         background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
         color: white !important;
         border-radius: 50% !important;
@@ -1433,13 +1433,13 @@ st.markdown("""
         padding: 0 !important;
         margin: 0 !important;
     }
-    div[data-testid="stVerticalBlock"]:has(div.floating-chat-fab):not(:has(div[data-testid="stVerticalBlock"])) button:hover {
+    div[data-testid="stVerticalBlock"]:has(> div > div.floating-chat-fab) button:hover {
         transform: scale(1.05) !important;
         border-color: #3b82f6 !important;
     }
     
     /* Styling for the expanded floating container */
-    div[data-testid="stVerticalBlock"]:has(div.floating-chat-expanded):not(:has(div[data-testid="stVerticalBlock"])) {
+    div[data-testid="stVerticalBlock"]:has(> div > div.floating-chat-expanded) {
         position: fixed !important;
         bottom: 24px !important;
         right: 24px !important;
