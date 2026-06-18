@@ -4,9 +4,26 @@ import requests
 import pandas as pd
 import numpy as np
 
-DEFAULT_NVIDIA_KEY = "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"
 INVOKE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 MODEL_NAME = "google/diffusiongemma-26b-a4b-it"
+
+def resolve_api_key(api_key: str = None) -> str:
+    """
+    Resolves the NVIDIA API key from parameter, Streamlit secrets, or environment variables.
+    """
+    if api_key and api_key.strip():
+        return api_key.strip()
+    
+    try:
+        import streamlit as st
+        if "NVIDIA_API_KEY" in st.secrets:
+            val = st.secrets["NVIDIA_API_KEY"]
+            if val and val.strip():
+                return val.strip()
+    except Exception:
+        pass
+        
+    return os.environ.get("NVIDIA_API_KEY", "").strip()
 
 def call_nvidia_llm(prompt: str, api_key: str):
     """
@@ -64,9 +81,7 @@ def generate_policy_brief(df_risk: pd.DataFrame, water_cols: list, api_key: str 
     top_exceeded_str = [f"{item[0].split(' (')[0]} ({item[1]:.1f}% of districts exceed standard)" for item in top_exceeded]
     
     # Resolve API Key
-    resolved_key = api_key or os.environ.get("NVIDIA_API_KEY")
-    if not resolved_key or resolved_key.strip() == "":
-        resolved_key = DEFAULT_NVIDIA_KEY
+    resolved_key = resolve_api_key(api_key)
         
     try:
         prompt = f"""
@@ -214,9 +229,7 @@ def answer_citizen_query(df_risk: pd.DataFrame, query: str, active_district: str
     hazards, _, _, safety_status = analyze_district_health_hazards(dist_row, water_cols)
     
     # Resolve API Key
-    resolved_key = api_key or os.environ.get("NVIDIA_API_KEY")
-    if not resolved_key or resolved_key.strip() == "":
-        resolved_key = DEFAULT_NVIDIA_KEY
+    resolved_key = resolve_api_key(api_key)
         
     # Format actual chemical measurements from the dataset to prevent hallucinations
     from src.risk_calculator import match_bis_standard
@@ -344,9 +357,7 @@ def generate_treatment_recommendation(district_row: pd.Series, water_cols: list,
         for hz in hazards[:4]
     ]
 
-    resolved_key = api_key or os.environ.get("NVIDIA_API_KEY")
-    if not resolved_key or resolved_key.strip() == "":
-        resolved_key = DEFAULT_NVIDIA_KEY
+    resolved_key = resolve_api_key(api_key)
 
     if not exceedance_rows:
         return generate_offline_treatment_recommendation(district, score, category, contributors)

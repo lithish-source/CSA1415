@@ -691,15 +691,16 @@ except Exception as e:
     st.stop()
 
 # Initialize session state for searched or detected district & API key
-DEFAULT_NVIDIA_KEY = "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"
-
 if "active_district" not in st.session_state:
     st.session_state.active_district = "Salem" # default starting district
 if "active_state" not in st.session_state:
     st.session_state.active_state = "Tamil Nadu" # default starting state
 
 if "nvidia_api_key" not in st.session_state:
-    st.session_state.nvidia_api_key = DEFAULT_NVIDIA_KEY
+    if "NVIDIA_API_KEY" in st.secrets:
+        st.session_state.nvidia_api_key = st.secrets["NVIDIA_API_KEY"]
+    else:
+        st.session_state.nvidia_api_key = os.environ.get("NVIDIA_API_KEY", "")
 
 # ----------------- STANDALONE CHATBOT ROUTER -----------------
 if "chat" in st.query_params:
