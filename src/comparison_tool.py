@@ -20,7 +20,7 @@ def render_comparison_tool(risk_df: pd.DataFrame, state_col: str, district_col: 
         comp_dist1 = st.selectbox(
             "Select District 1", 
             comp_districts1,
-            key="comp_district_select_1"
+            key=f"comp_district_select_1_{comp_state1}"
         )
     with col_comp_sel2:
         comp_state2 = st.selectbox(
@@ -32,7 +32,7 @@ def render_comparison_tool(risk_df: pd.DataFrame, state_col: str, district_col: 
         comp_dist2 = st.selectbox(
             "Select District 2", 
             comp_districts2,
-            key="comp_district_select_2"
+            key=f"comp_district_select_2_{comp_state2}"
         )
 
     if comp_dist1 != comp_dist2 or comp_state1 != comp_state2:
@@ -88,21 +88,35 @@ def render_comparison_tool(risk_df: pd.DataFrame, state_col: str, district_col: 
                 for f in radar_features:
                     labels.append(f.split(" (")[0])
                     _, limits = match_bis_standard(f)
+                    
+                    val1 = row1.get(f)
+                    val2 = row2.get(f)
+                    
+                    # Clean NaN/Null values to avoid Plotly axis scale failures
+                    if pd.isnull(val1) or pd.isna(val1):
+                        val1 = 7.0 if f.lower() == "ph" else 0.0
+                    if pd.isnull(val2) or pd.isna(val2):
+                        val2 = 7.0 if f.lower() == "ph" else 0.0
+                        
                     if limits:
                         acc = limits[0]
                         if f.lower() == "ph":
-                            r1_vals.append(abs(row1[f] - 7.0) / 1.5)
-                            r2_vals.append(abs(row2[f] - 7.0) / 1.5)
+                            r1_vals.append(abs(val1 - 7.0) / 1.5)
+                            r2_vals.append(abs(val2 - 7.0) / 1.5)
                         else:
-                            r1_vals.append(row1[f] / acc if acc > 0 else 0)
-                            r2_vals.append(row2[f] / acc if acc > 0 else 0)
+                            r1_vals.append(val1 / acc if acc > 0 else 0.0)
+                            r2_vals.append(val2 / acc if acc > 0 else 0.0)
                     else:
-                        r1_vals.append(0)
-                        r2_vals.append(0)
+                        r1_vals.append(0.0)
+                        r2_vals.append(0.0)
                         
                 r1_vals.append(r1_vals[0])
                 r2_vals.append(r2_vals[0])
                 labels.append(labels[0])
+                
+                # Check for any remaining NaNs in values list and force default to 0.0
+                r1_vals = [0.0 if pd.isnull(x) or pd.isna(x) else x for x in r1_vals]
+                r2_vals = [0.0 if pd.isnull(x) or pd.isna(x) else x for x in r2_vals]
                 
                 fig_r = go.Figure()
                 fig_r.add_trace(go.Scatterpolar(
@@ -113,8 +127,14 @@ def render_comparison_tool(risk_df: pd.DataFrame, state_col: str, district_col: 
                     r=r2_vals, theta=labels, fill='toself', name=comp_dist2,
                     line_color="#dc2626", fillcolor="rgba(220,38,38,0.08)"
                 ))
+                
+                # Determine absolute max to ensure a valid range boundary
+                max_val = max(max(r1_vals), max(r2_vals), 1.5)
+                if pd.isnull(max_val) or pd.isna(max_val):
+                    max_val = 1.5
+                    
                 fig_r.update_layout(
-                    polar=dict(radialaxis=dict(visible=True, range=[0, max(max(r1_vals), max(r2_vals), 1.5) * 1.1])),
+                    polar=dict(radialaxis=dict(visible=True, range=[0.0, float(max_val * 1.1)])),
                     showlegend=False,
                     height=300,
                     margin=dict(l=35, r=35, t=10, b=10),

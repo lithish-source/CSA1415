@@ -1173,7 +1173,7 @@ with col_search_main:
             "Select District",
             state_districts,
             index=default_dist_idx,
-            key="main_district_select",
+            key=f"main_district_select_{selected_state}",
             label_visibility="collapsed"
         )
 
