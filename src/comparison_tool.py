@@ -9,6 +9,19 @@ def render_comparison_tool(risk_df: pd.DataFrame, state_col: str, district_col: 
     Renders the side-by-side comparison tool for two districts.
     Ensures state-aware filtering and handles dynamic dependent dropdown race conditions.
     """
+    # Initialize comparison state-level defaults in session state to avoid key mismatches
+    if "comp_state_select_1" not in st.session_state:
+        st.session_state.comp_state_select_1 = sorted(risk_df[state_col].unique())[0]
+    if "comp_district_select_1" not in st.session_state:
+        initial_dists1 = sorted(risk_df[risk_df[state_col] == st.session_state.comp_state_select_1][district_col].unique())
+        st.session_state.comp_district_select_1 = initial_dists1[0]
+        
+    if "comp_state_select_2" not in st.session_state:
+        st.session_state.comp_state_select_2 = sorted(risk_df[state_col].unique())[0]
+    if "comp_district_select_2" not in st.session_state:
+        initial_dists2 = sorted(risk_df[risk_df[state_col] == st.session_state.comp_state_select_2][district_col].unique())
+        st.session_state.comp_district_select_2 = initial_dists2[0]
+
     col_comp_sel1, col_comp_sel2 = st.columns(2)
     with col_comp_sel1:
         comp_state1 = st.selectbox(
@@ -17,10 +30,14 @@ def render_comparison_tool(risk_df: pd.DataFrame, state_col: str, district_col: 
             key="comp_state_select_1"
         )
         comp_districts1 = sorted(risk_df[risk_df[state_col] == comp_state1][district_col].unique())
+        # Safe sync: if the previously selected district is not in the new state's districts, reset it
+        if st.session_state.comp_district_select_1 not in comp_districts1:
+            st.session_state.comp_district_select_1 = comp_districts1[0]
+            
         comp_dist1 = st.selectbox(
             "Select District 1", 
             comp_districts1,
-            key=f"comp_district_select_1_{comp_state1}"
+            key="comp_district_select_1"
         )
     with col_comp_sel2:
         comp_state2 = st.selectbox(
@@ -29,10 +46,14 @@ def render_comparison_tool(risk_df: pd.DataFrame, state_col: str, district_col: 
             key="comp_state_select_2"
         )
         comp_districts2 = sorted(risk_df[risk_df[state_col] == comp_state2][district_col].unique())
+        # Safe sync: if the previously selected district is not in the new state's districts, reset it
+        if st.session_state.comp_district_select_2 not in comp_districts2:
+            st.session_state.comp_district_select_2 = comp_districts2[0]
+            
         comp_dist2 = st.selectbox(
             "Select District 2", 
             comp_districts2,
-            key=f"comp_district_select_2_{comp_state2}"
+            key="comp_district_select_2"
         )
 
     # Console log to trace values in the server log file

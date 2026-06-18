@@ -959,16 +959,8 @@ with col_search_main:
             font-weight: 600 !important;
             border: 1px solid rgba(255, 255, 255, 0.1) !important;
             border-radius: 12px !important;
-            padding: 12px 16px !important;
-            cursor: pointer !important;
             font-size: 0.9rem !important;
-            transition: background-color 0.2s, color 0.2s, border-color 0.2s !important;
             width: 100% !important;
-            height: 44px !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            box-sizing: border-box !important;
         }
         div.st-key-locate_me_button button:hover {
             background-color: rgba(255, 255, 255, 0.1) !important;
@@ -978,14 +970,10 @@ with col_search_main:
         div.st-key-locate_me_button button:active {
             background-color: rgba(255, 255, 255, 0.15) !important;
         }
-        div.st-key-locate_me_button p {
-            margin: 0 !important;
-            line-height: 1 !important;
-        }
         </style>
     """, unsafe_allow_html=True)
 
-    col_input, col_loc = st.columns([3.5, 1])
+    col_input, col_loc = st.columns([2.5, 1])
     with col_input:
         # Native search input widget
         st.text_input(
