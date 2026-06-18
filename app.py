@@ -18,6 +18,7 @@ from src.health_engine import analyze_district_health_hazards
 from src.gemini_insights import answer_citizen_query, generate_treatment_recommendation
 from src.gis_mapping import render_district_map, render_parameter_map
 from src.pdf_generator import generate_district_pdf_report
+from src.comparison_tool import render_comparison_tool
 
 def clean_html(html_str):
     return "\n".join(line.strip() for line in html_str.split("\n") if line.strip())
@@ -1453,92 +1454,7 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-col_comp_sel1, col_comp_sel2 = st.columns(2)
-with col_comp_sel1:
-    comp_state1 = st.selectbox("Select State 1", sorted(risk_df[state_col].unique()))
-    comp_dist1 = st.selectbox("Select District 1", sorted(risk_df[risk_df[state_col] == comp_state1][district_col].unique()))
-with col_comp_sel2:
-    comp_state2 = st.selectbox("Select State 2", sorted(risk_df[state_col].unique()))
-    comp_dist2 = st.selectbox("Select District 2", sorted(risk_df[risk_df[state_col] == comp_state2][district_col].unique()))
-
-if comp_dist1 != comp_dist2 or comp_state1 != comp_state2:
-    col_c1, col_c_radar, col_c2 = st.columns([1, 1.8, 1])
-    
-    row1 = risk_df[(risk_df[state_col] == comp_state1) & (risk_df[district_col] == comp_dist1)].iloc[0]
-    row2 = risk_df[(risk_df[state_col] == comp_state2) & (risk_df[district_col] == comp_dist2)].iloc[0]
-    
-    # Left Card
-    with col_c1:
-        st.markdown(f"""
-            <div class="comp-card" style="margin-top:20px; height:100%;">
-                <div class="comp-name">{row1[district_col]}</div>
-                <div style="font-size:0.8rem; color:#64748b; font-weight:600;">{row1[state_col]}</div>
-                <div class="comp-score">{row1['Risk Score']:.0f}</div>
-                <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#94a3b8;">Water Risk Score</div>
-                <div style="font-size:0.85rem; font-weight:700; color:#cbd5e1; margin-top:15px; background:rgba(255,255,255,0.05); padding:6px; border-radius:6px;">{row1['Risk Category']}</div>
-            </div>
-        """, unsafe_allow_html=True)
-        
-    # Right Card
-    with col_c2:
-        st.markdown(f"""
-            <div class="comp-card" style="margin-top:20px; height:100%;">
-                <div class="comp-name">{row2[district_col]}</div>
-                <div style="font-size:0.8rem; color:#64748b; font-weight:600;">{row2[state_col]}</div>
-                <div class="comp-score">{row2['Risk Score']:.0f}</div>
-                <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#94a3b8;">Water Risk Score</div>
-                <div style="font-size:0.85rem; font-weight:700; color:#cbd5e1; margin-top:15px; background:rgba(255,255,255,0.05); padding:6px; border-radius:6px;">{row2['Risk Category']}</div>
-            </div>
-        """, unsafe_allow_html=True)
-        
-    # Radar Chart
-    with col_c_radar:
-        radar_features = []
-        for term in ["ph", "ec (", "f (", "no3", "hardness", "fe (", "as (", "u ("]:
-            match = next((c for c in water_cols if term in c.lower()), None)
-            if match:
-                radar_features.append(match)
-                
-        if len(radar_features) >= 3:
-            r1_vals = []
-            r2_vals = []
-            labels = []
-            for f in radar_features:
-                labels.append(f.split(" (")[0])
-                _, limits = match_bis_standard(f)
-                if limits:
-                    acc = limits[0]
-                    if f.lower() == "ph":
-                        r1_vals.append(abs(row1[f] - 7.0) / 1.5)
-                        r2_vals.append(abs(row2[f] - 7.0) / 1.5)
-                    else:
-                        r1_vals.append(row1[f] / acc if acc > 0 else 0)
-                        r2_vals.append(row2[f] / acc if acc > 0 else 0)
-                else:
-                    r1_vals.append(0)
-                    r2_vals.append(0)
-                    
-            r1_vals.append(r1_vals[0])
-            r2_vals.append(r2_vals[0])
-            labels.append(labels[0])
-            
-            fig_r = go.Figure()
-            fig_r.add_trace(go.Scatterpolar(
-                r=r1_vals, theta=labels, fill='toself', name=comp_dist1,
-                line_color="#3b82f6", fillcolor="rgba(59,130,246,0.08)"
-            ))
-            fig_r.add_trace(go.Scatterpolar(
-                r=r2_vals, theta=labels, fill='toself', name=comp_dist2,
-                line_color="#dc2626", fillcolor="rgba(220,38,38,0.08)"
-            ))
-            fig_r.update_layout(
-                polar=dict(radialaxis=dict(visible=True, range=[0, max(max(r1_vals), max(r2_vals), 1.5) * 1.1])),
-                showlegend=False,
-                height=300,
-                margin=dict(l=35, r=35, t=10, b=10),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
-            )
-            st.plotly_chart(fig_r, use_container_width=True)
+render_comparison_tool(risk_df, state_col, district_col, water_cols)
 
 # ----------------- SECTION 7: FLOATING AI ADVISOR -----------------
 st.markdown(f"""
