@@ -35,6 +35,18 @@ def render_comparison_tool(risk_df: pd.DataFrame, state_col: str, district_col: 
             key=f"comp_district_select_2_{comp_state2}"
         )
 
+    # Console log to trace values in the server log file
+    print(f"[COMPARISON TOOL] State1: {comp_state1}, Dist1: {comp_dist1} (options: {len(comp_districts1)}) | State2: {comp_state2}, Dist2: {comp_dist2} (options: {len(comp_districts2)})")
+
+    # Temporary visual debug container to identify state-resolution values
+    st.markdown(f"""
+        <div style="background-color: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 8px; padding: 12px; margin-bottom: 20px; font-size: 0.85rem; color: #93c5fd;">
+            <strong>🔍 Debug Info:</strong><br/>
+            • <b>District 1:</b> {comp_dist1} in <u>{comp_state1}</u> (Total options: {len(comp_districts1)})<br/>
+            • <b>District 2:</b> {comp_dist2} in <u>{comp_state2}</u> (Total options: {len(comp_districts2)})
+        </div>
+    """, unsafe_allow_html=True)
+
     if comp_dist1 != comp_dist2 or comp_state1 != comp_state2:
         match1 = risk_df[(risk_df[state_col] == comp_state1) & (risk_df[district_col] == comp_dist1)]
         match2 = risk_df[(risk_df[state_col] == comp_state2) & (risk_df[district_col] == comp_dist2)]
