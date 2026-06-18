@@ -1014,6 +1014,7 @@ with col_search_main:
     
     <script>
     function sendValueToStreamlit(val) {
+        let success = false;
         try {
             const parentDoc = window.parent.document;
             
@@ -1055,14 +1056,19 @@ with col_search_main:
                 input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
                 input.blur();
                 
-                return true;
+                success = true;
             }
         } catch (e) {
-            console.error("DOM communication failed", e);
+            console.warn("DOM communication blocked, falling back to top navigation redirection.", e);
         }
         
-        // Fallback to URL query parameter reload if DOM access is blocked
-        window.parent.postMessage({ type: 'navigate', url: '?search=' + encodeURIComponent(val) }, '*');
+        if (!success) {
+            try {
+                window.parent.location.href = window.parent.location.origin + window.parent.location.pathname + "?search=" + encodeURIComponent(val);
+            } catch (err) {
+                window.top.location.href = window.top.location.origin + window.top.location.pathname + "?search=" + encodeURIComponent(val);
+            }
+        }
     }
 
     function submitSearch() {
