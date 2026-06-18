@@ -696,13 +696,6 @@ if "active_district" not in st.session_state:
     st.session_state.active_district = "Salem" # default starting district
 if "active_state" not in st.session_state:
     st.session_state.active_state = "Tamil Nadu" # default starting state
-if "last_processed_loc" not in st.session_state:
-    st.session_state.last_processed_loc = None
-
-# Declare geolocator component
-parent_dir = os.path.dirname(os.path.abspath(__file__))
-locator_dir = os.path.join(parent_dir, "src", "locator_component")
-geo_locator_component = components.declare_component("geo_locator", path=locator_dir)
 
 if "nvidia_api_key" not in st.session_state:
     if "NVIDIA_API_KEY" in st.secrets:
@@ -798,6 +791,38 @@ def resolve_search_query(query_str):
     if not cleaned_search:
         return False
         
+    if cleaned_search.startswith("coords:"):
+        try:
+            coord_part = query_str.split(":", 1)[1]
+            lat_str, lon_str = coord_part.split(",", 1)
+            user_lat = float(lat_str)
+            user_lon = float(lon_str)
+            
+            lat_col = next((c for c in risk_df.columns if c.lower() in ["latitude", "lat"]), None)
+            lon_col = next((c for c in risk_df.columns if c.lower() in ["longitude", "lon", "lng"]), None)
+            
+            if lat_col and lon_col:
+                geo_df = risk_df.dropna(subset=[lat_col, lon_col])
+                distances = haversine_km(user_lat, user_lon, geo_df[lat_col].astype(float), geo_df[lon_col].astype(float))
+                min_idx = distances.idxmin()
+                nearest_district = geo_df.loc[min_idx, district_col]
+                nearest_state = geo_df.loc[min_idx, state_col]
+                nearest_dist = distances.loc[min_idx]
+                
+                st.session_state.active_district = nearest_district
+                st.session_state.active_state = nearest_state
+                if nearest_dist > 500:
+                    st.session_state.state_alert = f"Detected location is outside local region. Showing nearest registry district: **{nearest_district}** ({nearest_state}), approx. {nearest_dist:.0f} km away."
+                else:
+                    st.session_state.state_alert = f"Location matched to nearest district: **{nearest_district}** ({nearest_state})."
+                return True
+            else:
+                st.session_state.state_alert = "Coordinate mapping columns missing in database."
+                return False
+        except Exception as ex:
+            st.session_state.state_alert = f"Error matching coordinates: {ex}"
+            return False
+            
     if "," in cleaned_search:
         parts = [p.strip() for p in cleaned_search.split(",", 1)]
         d_search, s_search = parts[0], parts[1]
@@ -924,41 +949,125 @@ with col_search_main:
             key="main_search_input"
         )
     with col_loc:
-        loc_value = geo_locator_component(key="geo_loc")
-        if loc_value and loc_value != st.session_state.last_processed_loc:
-            st.session_state.last_processed_loc = loc_value
-            if loc_value.startswith("coords:"):
-                try:
-                    coord_part = loc_value.split(":", 1)[1]
-                    lat_str, lon_str = coord_part.split(",", 1)
-                    user_lat = float(lat_str)
-                    user_lon = float(lon_str)
+        # Render the custom HTML geolocator form block that submits coordinates to parent window
+        geo_btn_html = """
+        <style>
+        body {
+            margin: 0;
+            background-color: transparent;
+            overflow: hidden;
+        }
+        .geo-btn {
+            background-color: rgba(255, 255, 255, 0.05);
+            color: #cbd5e1;
+            font-weight: 600;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 12px 16px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background-color 0.2s, color 0.2s;
+            white-space: nowrap;
+            width: 100%;
+            box-sizing: border-box;
+            height: 42px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        .geo-btn:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+        }
+        .geo-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        </style>
+        
+        <form id="geoForm" action="/" method="get" target="_parent">
+            <input type="hidden" name="search" id="searchParam" value="">
+        </form>
+        
+        <button type="button" class="geo-btn" id="locateBtn" onclick="geoLocate()">📍 Locate Me</button>
+        
+        <script>
+        async function geoLocate() {
+            const locateBtn = document.getElementById('locateBtn');
+            const originalText = locateBtn.innerHTML;
+            locateBtn.innerHTML = "⌛ Locating...";
+            locateBtn.disabled = true;
+
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    async (position) => {
+                        const lat = position.coords.latitude;
+                        const lon = position.coords.longitude;
+                        submitCoords(`coords:${lat},${lon}`);
+                    },
+                    async (error) => {
+                        console.warn("HTML5 Geolocation failed, trying IP coordinates...", error);
+                        await geoLocateIP(locateBtn, originalText);
+                    },
+                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+                );
+            } else {
+                await geoLocateIP(locateBtn, originalText);
+            }
+        }
+
+        async function geoLocateIP(locateBtn, originalText) {
+            const urls = [
+                { url: 'https://ipinfo.io/json', locKey: 'loc' },
+                { url: 'https://ipapi.co/json/', latKey: 'latitude', lonKey: 'longitude', checkError: true },
+                { url: 'https://geolocation-db.com/json/', latKey: 'latitude', lonKey: 'longitude' },
+                { url: 'https://freeipapi.com/api/json', latKey: 'latitude', lonKey: 'longitude' }
+            ];
+
+            for (const item of urls) {
+                try {
+                    const res = await fetch(item.url);
+                    if (!res.ok) continue;
+                    const data = await res.json();
+                    if (item.checkError && (data.error || data.reason === 'RateLimited')) {
+                        continue;
+                    }
                     
-                    lat_col = next((c for c in risk_df.columns if c.lower() in ["latitude", "lat"]), None)
-                    lon_col = next((c for c in risk_df.columns if c.lower() in ["longitude", "lon", "lng"]), None)
+                    if (item.locKey && data[item.locKey]) {
+                        submitCoords(`coords:${data[item.locKey]}`);
+                        return;
+                    }
                     
-                    if lat_col and lon_col:
-                        geo_df = risk_df.dropna(subset=[lat_col, lon_col])
-                        distances = haversine_km(user_lat, user_lon, geo_df[lat_col].astype(float), geo_df[lon_col].astype(float))
-                        min_idx = distances.idxmin()
-                        nearest_district = geo_df.loc[min_idx, district_col]
-                        nearest_state = geo_df.loc[min_idx, state_col]
-                        nearest_dist = distances.loc[min_idx]
-                        
-                        st.session_state.active_district = nearest_district
-                        st.session_state.active_state = nearest_state
-                        if nearest_dist > 500:
-                            st.session_state.state_alert = f"Detected location is outside local region. Showing nearest registry district: **{nearest_district}** ({nearest_state}), approx. {nearest_dist:.0f} km away."
-                        else:
-                            st.session_state.state_alert = f"Location matched to nearest district: **{nearest_district}** ({nearest_state})."
-                    else:
-                        st.session_state.state_alert = "Coordinate mapping columns missing in database."
-                except Exception as ex:
-                    st.session_state.state_alert = f"Error matching coordinates: {ex}"
-            else:
-                resolve_search_query(loc_value)
-            st.query_params["search"] = f"{st.session_state.active_district}, {st.session_state.active_state}"
-            st.rerun()
+                    const lat = data.latitude || data[item.latKey];
+                    const lon = data.longitude || data[item.lonKey];
+                    if (lat && lon) {
+                        submitCoords(`coords:${lat},${lon}`);
+                        return;
+                    }
+                    
+                    const city = data.city || data[item.cityName];
+                    if (city) {
+                        submitCoords(city);
+                        return;
+                    }
+                } catch (err) {
+                    console.warn("Failed IP location check on " + item.url, err);
+                }
+            }
+
+            locateBtn.innerHTML = originalText;
+            locateBtn.disabled = false;
+            alert("Location lookup failed. Please search for your district manually.");
+        }
+
+        function submitCoords(val) {
+            document.getElementById('searchParam').value = val;
+            document.getElementById('geoForm').submit();
+        }
+        </script>
+        """
+        components.html(geo_btn_html, height=45)
     
     # Direct browse selectbox dropdowns
     st.write("") # small spacing
