@@ -36,7 +36,7 @@ def render_comparison_tool(risk_df: pd.DataFrame, state_col: str, district_col: 
         )
 
     # Console log to trace values in the server log file
-    print(f"[COMPARISON TOOL] State1: {comp_state1}, Dist1: {comp_dist1} (options: {len(comp_districts1)}) | State2: {comp_state2}, Dist2: {comp_dist2} (options: {len(comp_districts2)})")
+    print(f"[COMPARISON TOOL] State1: {comp_state1}, Dist1: {comp_dist1} (options: {len(comp_districts1)}) | State2: {comp_state2}, Dist2: {comp_dist2} (options: {len(comp_districts2)})", flush=True)
 
     # Temporary visual debug container to identify state-resolution values
     st.markdown(f"""

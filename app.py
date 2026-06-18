@@ -872,38 +872,40 @@ if "hidden_comm_input" in st.session_state and st.session_state.hidden_comm_inpu
 hidden_query = st.text_input("hidden_locator_comm", key="hidden_comm_input", label_visibility="collapsed", placeholder="hidden_locator_comm")
 
 # 2. Check for search string passed via URL query parameter (from the custom HTML search form)
-query_params = st.query_params
-if "search" in query_params:
-    search_val = query_params["search"]
-    cleaned_search = search_val.strip().lower()
-    
-    if "," in cleaned_search:
-        parts = [p.strip() for p in cleaned_search.split(",", 1)]
-        d_search, s_search = parts[0], parts[1]
-        exact_match = risk_df[(risk_df[district_col].str.lower() == d_search) & (risk_df[state_col].str.lower() == s_search)]
-        if not exact_match.empty:
-            st.session_state.active_district = exact_match.iloc[0][district_col]
-            st.session_state.active_state = exact_match.iloc[0][state_col]
-    else:
-        # Check if matches district name
-        dist_match = risk_df[risk_df[district_col].str.lower() == cleaned_search]
-        if not dist_match.empty:
-            st.session_state.active_district = dist_match.iloc[0][district_col]
-            st.session_state.active_state = dist_match.iloc[0][state_col]
+if "query_param_parsed" not in st.session_state:
+    query_params = st.query_params
+    if "search" in query_params:
+        search_val = query_params["search"]
+        cleaned_search = search_val.strip().lower()
+        
+        if "," in cleaned_search:
+            parts = [p.strip() for p in cleaned_search.split(",", 1)]
+            d_search, s_search = parts[0], parts[1]
+            exact_match = risk_df[(risk_df[district_col].str.lower() == d_search) & (risk_df[state_col].str.lower() == s_search)]
+            if not exact_match.empty:
+                st.session_state.active_district = exact_match.iloc[0][district_col]
+                st.session_state.active_state = exact_match.iloc[0][state_col]
         else:
-            # Check if matches state name
-            state_match = risk_df[risk_df[state_col].str.lower() == cleaned_search]
-            if not state_match.empty:
-                state_dists = risk_df[risk_df[state_col].str.lower() == cleaned_search].sort_values(by="Risk Score", ascending=False)
-                st.session_state.active_district = state_dists.iloc[0][district_col]
-                st.session_state.active_state = state_dists.iloc[0][state_col]
-                st.session_state.state_alert = f"Showing highest risk district in **{state_dists.iloc[0][state_col]}**."
+            # Check if matches district name
+            dist_match = risk_df[risk_df[district_col].str.lower() == cleaned_search]
+            if not dist_match.empty:
+                st.session_state.active_district = dist_match.iloc[0][district_col]
+                st.session_state.active_state = dist_match.iloc[0][state_col]
             else:
-                # Check partial district match
-                partial_match = risk_df[risk_df[district_col].str.lower().str.contains(cleaned_search)]
-                if not partial_match.empty:
-                    st.session_state.active_district = partial_match.iloc[0][district_col]
-                    st.session_state.active_state = partial_match.iloc[0][state_col]
+                # Check if matches state name
+                state_match = risk_df[risk_df[state_col].str.lower() == cleaned_search]
+                if not state_match.empty:
+                    state_dists = risk_df[risk_df[state_col].str.lower() == cleaned_search].sort_values(by="Risk Score", ascending=False)
+                    st.session_state.active_district = state_dists.iloc[0][district_col]
+                    st.session_state.active_state = state_dists.iloc[0][state_col]
+                    st.session_state.state_alert = f"Showing highest risk district in **{state_dists.iloc[0][state_col]}**."
+                else:
+                    # Check partial district match
+                    partial_match = risk_df[risk_df[district_col].str.lower().str.contains(cleaned_search)]
+                    if not partial_match.empty:
+                        st.session_state.active_district = partial_match.iloc[0][district_col]
+                        st.session_state.active_state = partial_match.iloc[0][state_col]
+    st.session_state.query_param_parsed = True
 
 # Set active district query parameter back to keep URL aligned
 st.query_params["search"] = f"{st.session_state.active_district}, {st.session_state.active_state}"
