@@ -696,6 +696,13 @@ if "active_district" not in st.session_state:
     st.session_state.active_district = "Salem" # default starting district
 if "active_state" not in st.session_state:
     st.session_state.active_state = "Tamil Nadu" # default starting state
+if "last_processed_loc" not in st.session_state:
+    st.session_state.last_processed_loc = None
+
+# Declare geolocator component
+parent_dir = os.path.dirname(os.path.abspath(__file__))
+locator_dir = os.path.join(parent_dir, "src", "locator_component")
+geo_locator_component = components.declare_component("geo_locator", path=locator_dir)
 
 if "nvidia_api_key" not in st.session_state:
     if "NVIDIA_API_KEY" in st.secrets:
@@ -898,17 +905,60 @@ with col_search_main:
         div.st-key-main_search_input input::placeholder {
             color: #64748b !important;
         }
+        /* Custom adjustment to align and style the geolocator iframe container */
+        div[data-testid="stColumn"] iframe[title="src.locator_component.geo_locator"] {
+            border: none !important;
+            background: transparent !important;
+        }
         </style>
     """, unsafe_allow_html=True)
 
-    # Native search input widget
-    st.text_input(
-        "Search District",
-        value="",
-        placeholder="🔍 Search district name (e.g. Salem, Patna...)",
-        label_visibility="collapsed",
-        key="main_search_input"
-    )
+    col_input, col_loc = st.columns([3.5, 1])
+    with col_input:
+        # Native search input widget
+        st.text_input(
+            "Search District",
+            value="",
+            placeholder="🔍 Search district name (e.g. Salem, Patna...)",
+            label_visibility="collapsed",
+            key="main_search_input"
+        )
+    with col_loc:
+        loc_value = geo_locator_component(key="geo_loc")
+        if loc_value and loc_value != st.session_state.last_processed_loc:
+            st.session_state.last_processed_loc = loc_value
+            if loc_value.startswith("coords:"):
+                try:
+                    coord_part = loc_value.split(":", 1)[1]
+                    lat_str, lon_str = coord_part.split(",", 1)
+                    user_lat = float(lat_str)
+                    user_lon = float(lon_str)
+                    
+                    lat_col = next((c for c in risk_df.columns if c.lower() in ["latitude", "lat"]), None)
+                    lon_col = next((c for c in risk_df.columns if c.lower() in ["longitude", "lon", "lng"]), None)
+                    
+                    if lat_col and lon_col:
+                        geo_df = risk_df.dropna(subset=[lat_col, lon_col])
+                        distances = haversine_km(user_lat, user_lon, geo_df[lat_col].astype(float), geo_df[lon_col].astype(float))
+                        min_idx = distances.idxmin()
+                        nearest_district = geo_df.loc[min_idx, district_col]
+                        nearest_state = geo_df.loc[min_idx, state_col]
+                        nearest_dist = distances.loc[min_idx]
+                        
+                        st.session_state.active_district = nearest_district
+                        st.session_state.active_state = nearest_state
+                        if nearest_dist > 500:
+                            st.session_state.state_alert = f"Detected location is outside local region. Showing nearest registry district: **{nearest_district}** ({nearest_state}), approx. {nearest_dist:.0f} km away."
+                        else:
+                            st.session_state.state_alert = f"Location matched to nearest district: **{nearest_district}** ({nearest_state})."
+                    else:
+                        st.session_state.state_alert = "Coordinate mapping columns missing in database."
+                except Exception as ex:
+                    st.session_state.state_alert = f"Error matching coordinates: {ex}"
+            else:
+                resolve_search_query(loc_value)
+            st.query_params["search"] = f"{st.session_state.active_district}, {st.session_state.active_state}"
+            st.rerun()
     
     # Direct browse selectbox dropdowns
     st.write("") # small spacing
