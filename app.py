@@ -783,128 +783,66 @@ if "chat" in st.query_params:
         st.rerun()
     st.stop()
 
-# ----------------- PARSE ROUTING QUERY PARAMETERS -----------------
-# 1. Hidden parent-child DOM communication text input
-st.markdown("""
-    <style>
-    /* Visually hide the communication input container while keeping it interactive for DOM events */
-    div[data-testid="stTextInput"]:has(input[placeholder="hidden_locator_comm"]),
-    div[data-testid="stTextInput"]:has(input[aria-label="hidden_locator_comm"]),
-    div.st-key-hidden_comm_input {
-        position: absolute !important;
-        opacity: 0 !important;
-        width: 0 !important;
-        height: 0 !important;
-        pointer-events: none !important;
-        overflow: hidden !important;
-        z-index: -9999 !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
+# ----------------- PARSE ROUTING QUERY PARAMETERS & SEARCH INPUT -----------------
 
-if "hidden_comm_input" in st.session_state and st.session_state.hidden_comm_input:
-    cleaned_search = st.session_state.hidden_comm_input.strip()
-    if cleaned_search.lower().startswith("coords:"):
-        try:
-            coord_part = cleaned_search.split(":", 1)[1]
-            lat_str, lon_str = coord_part.split(",", 1)
-            user_lat = float(lat_str)
-            user_lon = float(lon_str)
-            
-            # Find nearest district in risk_df
-            lat_col = next((c for c in risk_df.columns if c.lower() in ["latitude", "lat"]), None)
-            lon_col = next((c for c in risk_df.columns if c.lower() in ["longitude", "lon", "lng"]), None)
-            
-            if lat_col and lon_col:
-                geo_df = risk_df.dropna(subset=[lat_col, lon_col])
-                distances = haversine_km(user_lat, user_lon, geo_df[lat_col].astype(float), geo_df[lon_col].astype(float))
-                min_idx = distances.idxmin()
-                nearest_district = geo_df.loc[min_idx, district_col]
-                nearest_state = geo_df.loc[min_idx, state_col]
-                nearest_dist = distances.loc[min_idx]
-                
-                st.session_state.active_district = nearest_district
-                st.session_state.active_state = nearest_state
-                if nearest_dist > 500:
-                    st.session_state.state_alert = f"Detected location is outside local region. Showing nearest registry district: **{nearest_district}** ({nearest_state}), approx. {nearest_dist:.0f} km away."
-                else:
-                    st.session_state.state_alert = f"Location matched to nearest district: **{nearest_district}** ({nearest_state})."
-            else:
-                st.session_state.state_alert = "Coordinate mapping columns missing in database."
-        except Exception as ex:
-            st.session_state.state_alert = f"Error matching coordinates: {ex}"
-    else:
-        cleaned_search_lower = cleaned_search.lower()
-        if "," in cleaned_search_lower:
-            parts = [p.strip() for p in cleaned_search_lower.split(",", 1)]
-            d_search, s_search = parts[0], parts[1]
-            exact_match = risk_df[(risk_df[district_col].str.lower() == d_search) & (risk_df[state_col].str.lower() == s_search)]
-            if not exact_match.empty:
-                st.session_state.active_district = exact_match.iloc[0][district_col]
-                st.session_state.active_state = exact_match.iloc[0][state_col]
-            else:
-                st.session_state.state_alert = f"No match found for district '{d_search}' in state '{s_search}'."
+# Helper function to resolve search query to a district/state
+def resolve_search_query(query_str):
+    cleaned_search = query_str.strip().lower()
+    if not cleaned_search:
+        return False
+        
+    if "," in cleaned_search:
+        parts = [p.strip() for p in cleaned_search.split(",", 1)]
+        d_search, s_search = parts[0], parts[1]
+        exact_match = risk_df[(risk_df[district_col].str.lower() == d_search) & (risk_df[state_col].str.lower() == s_search)]
+        if not exact_match.empty:
+            st.session_state.active_district = exact_match.iloc[0][district_col]
+            st.session_state.active_state = exact_match.iloc[0][state_col]
+            return True
         else:
-            dist_match = risk_df[risk_df[district_col].str.lower() == cleaned_search_lower]
-            if not dist_match.empty:
-                st.session_state.active_district = dist_match.iloc[0][district_col]
-                st.session_state.active_state = dist_match.iloc[0][state_col]
+            st.session_state.state_alert = f"No match found for district '{d_search}' in state '{s_search}'."
+            return False
+    else:
+        # Check if matches district name
+        dist_match = risk_df[risk_df[district_col].str.lower() == cleaned_search]
+        if not dist_match.empty:
+            st.session_state.active_district = dist_match.iloc[0][district_col]
+            st.session_state.active_state = dist_match.iloc[0][state_col]
+            return True
+        else:
+            # Check if matches state name
+            state_match = risk_df[risk_df[state_col].str.lower() == cleaned_search]
+            if not state_match.empty:
+                state_dists = risk_df[risk_df[state_col].str.lower() == cleaned_search].sort_values(by="Risk Score", ascending=False)
+                st.session_state.active_district = state_dists.iloc[0][district_col]
+                st.session_state.active_state = state_dists.iloc[0][state_col]
+                st.session_state.state_alert = f"Showing highest risk district in **{state_dists.iloc[0][state_col]}**."
+                return True
             else:
-                state_match = risk_df[risk_df[state_col].str.lower() == cleaned_search_lower]
-                if not state_match.empty:
-                    state_dists = risk_df[risk_df[state_col].str.lower() == cleaned_search_lower].sort_values(by="Risk Score", ascending=False)
-                    st.session_state.active_district = state_dists.iloc[0][district_col]
-                    st.session_state.active_state = state_dists.iloc[0][state_col]
-                    st.session_state.state_alert = f"Showing highest risk district in **{state_dists.iloc[0][state_col]}**."
+                # Check partial district match
+                partial_match = risk_df[risk_df[district_col].str.lower().str.contains(cleaned_search)]
+                if not partial_match.empty:
+                    st.session_state.active_district = partial_match.iloc[0][district_col]
+                    st.session_state.active_state = partial_match.iloc[0][state_col]
+                    return True
                 else:
-                    partial_match = risk_df[risk_df[district_col].str.lower().str.contains(cleaned_search_lower)]
-                    if not partial_match.empty:
-                        st.session_state.active_district = partial_match.iloc[0][district_col]
-                        st.session_state.active_state = partial_match.iloc[0][state_col]
-                    else:
-                        st.session_state.state_alert = f"No match found for '**{cleaned_search}**'. Please check spelling and try again."
-                
-    del st.session_state["hidden_comm_input"]
+                    st.session_state.state_alert = f"No match found for '**{query_str}**'. Please check spelling and try again."
+                    return False
+
+# 1. Process native search input if submitted
+if "main_search_input" in st.session_state and st.session_state.main_search_input.strip():
+    search_val = st.session_state.main_search_input.strip()
+    resolve_search_query(search_val)
     st.query_params["search"] = f"{st.session_state.active_district}, {st.session_state.active_state}"
+    # Reset the main_search_input widget value in session state to prevent looping
+    st.session_state.main_search_input = ""
     st.rerun()
 
-# Now instantiate the text input widget. It will be empty on the new rerun.
-hidden_query = st.text_input("hidden_locator_comm", key="hidden_comm_input", label_visibility="collapsed", placeholder="hidden_locator_comm")
-
-# 2. Check for search string passed via URL query parameter (from the custom HTML search form)
+# 2. Check for search string passed via URL query parameter on startup
 if "query_param_parsed" not in st.session_state:
     query_params = st.query_params
     if "search" in query_params:
-        search_val = query_params["search"]
-        cleaned_search = search_val.strip().lower()
-        
-        if "," in cleaned_search:
-            parts = [p.strip() for p in cleaned_search.split(",", 1)]
-            d_search, s_search = parts[0], parts[1]
-            exact_match = risk_df[(risk_df[district_col].str.lower() == d_search) & (risk_df[state_col].str.lower() == s_search)]
-            if not exact_match.empty:
-                st.session_state.active_district = exact_match.iloc[0][district_col]
-                st.session_state.active_state = exact_match.iloc[0][state_col]
-        else:
-            # Check if matches district name
-            dist_match = risk_df[risk_df[district_col].str.lower() == cleaned_search]
-            if not dist_match.empty:
-                st.session_state.active_district = dist_match.iloc[0][district_col]
-                st.session_state.active_state = dist_match.iloc[0][state_col]
-            else:
-                # Check if matches state name
-                state_match = risk_df[risk_df[state_col].str.lower() == cleaned_search]
-                if not state_match.empty:
-                    state_dists = risk_df[risk_df[state_col].str.lower() == cleaned_search].sort_values(by="Risk Score", ascending=False)
-                    st.session_state.active_district = state_dists.iloc[0][district_col]
-                    st.session_state.active_state = state_dists.iloc[0][state_col]
-                    st.session_state.state_alert = f"Showing highest risk district in **{state_dists.iloc[0][state_col]}**."
-                else:
-                    # Check partial district match
-                    partial_match = risk_df[risk_df[district_col].str.lower().str.contains(cleaned_search)]
-                    if not partial_match.empty:
-                        st.session_state.active_district = partial_match.iloc[0][district_col]
-                        st.session_state.active_state = partial_match.iloc[0][state_col]
+        resolve_search_query(query_params["search"])
     st.session_state.query_param_parsed = True
 
 # Set active district query parameter back to keep URL aligned
@@ -935,229 +873,42 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# Centered Custom Search Container using 100% custom HTML form target parent redirections
+# Centered Custom Search Container
 col_left_space, col_search_main, col_right_space = st.columns([0.3, 3.4, 0.3])
 
 with col_search_main:
-    # Render modern custom HTML search form & client-side geolocation redirect
-    search_form_html = """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    body {
-        margin: 0;
-        font-family: 'Inter', sans-serif;
-        background-color: transparent;
-    }
-    .search-form {
-        display: flex;
-        gap: 10px;
-        width: 100%;
-        margin-bottom: 12px;
-    }
-    .search-input {
-        flex-grow: 1;
-        padding: 12px 18px;
-        border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        background-color: rgba(17, 24, 39, 0.8);
-        color: #ffffff;
-        font-size: 0.95rem;
-        outline: none;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
-        transition: border-color 0.2s, box-shadow 0.2s;
-    }
-    .search-input::placeholder {
-        color: #64748b;
-    }
-    .search-input:focus {
-        border-color: #3b82f6;
-        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
-    }
-    .search-btn {
-        background-color: #3b82f6;
-        color: white;
-        font-weight: 600;
-        border: none;
-        border-radius: 12px;
-        padding: 12px 24px;
-        cursor: pointer;
-        font-size: 0.9rem;
-        transition: background-color 0.2s;
-        white-space: nowrap;
-    }
-    .search-btn:hover {
-        background-color: #2563eb;
-    }
-    .geo-btn {
-        background-color: rgba(255, 255, 255, 0.05);
-        color: #cbd5e1;
-        font-weight: 600;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 12px;
-        padding: 12px 16px;
-        cursor: pointer;
-        font-size: 0.9rem;
-        transition: background-color 0.2s, color 0.2s;
-        white-space: nowrap;
-    }
-    .geo-btn:hover {
-        background-color: rgba(255, 255, 255, 0.1);
-        color: #ffffff;
-    }
-    </style>
-    
-    <form class="search-form" onsubmit="event.preventDefault(); submitSearch();">
-        <input type="text" id="searchInput" class="search-input" placeholder="Search district name (e.g. Salem, Patna...)" required />
-        <button type="submit" class="search-btn">🔍 Search</button>
-        <button type="button" class="geo-btn" onclick="geoLocate()">📍 Locate Me</button>
-    </form>
-    
-    <script>
-    function sendValueToStreamlit(val) {
-        let success = false;
-        try {
-            const parentDoc = window.parent.document;
-            
-            // Primary: Find input by unique Streamlit widget key class wrapper
-            let input = parentDoc.querySelector('.st-key-hidden_comm_input input');
-            
-            // Fallback 1: Try finding input by label link (most robust in Streamlit standard layout)
-            if (!input) {
-                const label = Array.from(parentDoc.querySelectorAll('label')).find(el => el.textContent && el.textContent.trim() === 'hidden_locator_comm');
-                if (label) {
-                    const inputId = label.getAttribute('for');
-                    if (inputId) {
-                        input = parentDoc.getElementById(inputId);
-                    }
-                }
-            }
-            
-            // Fallback 2: Try placeholder/aria-label/name search
-            if (!input) {
-                input = Array.from(parentDoc.querySelectorAll('input')).find(el => 
-                    el.getAttribute('aria-label') === 'hidden_locator_comm' || 
-                    el.placeholder === 'hidden_locator_comm' ||
-                    el.name === 'hidden_locator_comm'
-                );
-            }
-            
-            if (input) {
-                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                nativeInputValueSetter.call(input, val);
-                
-                // Dispatch input and change events
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.dispatchEvent(new Event('change', { bubbles: true }));
-                
-                // Focus, trigger Enter keys, and blur to force Streamlit rerun
-                input.focus();
-                input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                input.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                input.blur();
-                
-                success = true;
-            }
-        } catch (e) {
-            console.warn("DOM communication blocked, falling back to top navigation redirection.", e);
+    # Inject custom styling to make the native search input fit the SaaS dark mode theme perfectly
+    st.markdown("""
+        <style>
+        div.st-key-main_search_input input {
+            padding: 12px 18px !important;
+            font-size: 0.95rem !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            border-radius: 12px !important;
+            background-color: rgba(17, 24, 39, 0.8) !important;
+            color: #ffffff !important;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15) !important;
+            transition: border-color 0.2s, box-shadow 0.2s !important;
         }
-        
-        if (!success) {
-            try {
-                window.parent.location.href = window.parent.location.origin + window.parent.location.pathname + "?search=" + encodeURIComponent(val);
-            } catch (err) {
-                window.top.location.href = window.top.location.origin + window.top.location.pathname + "?search=" + encodeURIComponent(val);
-            }
+        div.st-key-main_search_input input:focus {
+            border-color: #3b82f6 !important;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3), 0 4px 6px rgba(0, 0, 0, 0.15) !important;
+            outline: none !important;
         }
-    }
-
-    function submitSearch() {
-        const val = document.getElementById('searchInput').value;
-        sendValueToStreamlit(val);
-    }
-    
-    async function geoLocate() {
-        const locateBtn = document.querySelector('.geo-btn');
-        const originalText = locateBtn.innerHTML;
-        locateBtn.innerHTML = "⌛ Locating...";
-        locateBtn.disabled = true;
-
-        // Try browser GPS first
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                async (position) => {
-                    const lat = position.coords.latitude;
-                    const lon = position.coords.longitude;
-                    sendValueToStreamlit(`coords:${lat},${lon}`);
-                    locateBtn.innerHTML = originalText;
-                    locateBtn.disabled = false;
-                },
-                async (error) => {
-                    console.warn("HTML5 Geolocation failed/denied, trying IP coordinates...", error);
-                    await geoLocateIP(locateBtn, originalText);
-                },
-                { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-            );
-        } else {
-            await geoLocateIP(locateBtn, originalText);
+        div.st-key-main_search_input input::placeholder {
+            color: #64748b !important;
         }
-    }
+        </style>
+    """, unsafe_allow_html=True)
 
-    async function geoLocateIP(locateBtn, originalText) {
-        const urls = [
-            { url: 'https://ipinfo.io/json', locKey: 'loc' },
-            { url: 'https://ipapi.co/json/', latKey: 'latitude', lonKey: 'longitude', checkError: true },
-            { url: 'https://geolocation-db.com/json/', latKey: 'latitude', lonKey: 'longitude' },
-            { url: 'https://freeipapi.com/api/json', latKey: 'latitude', lonKey: 'longitude' }
-        ];
-
-        for (const item of urls) {
-            try {
-                const res = await fetch(item.url);
-                if (!res.ok) continue;
-                const data = await res.json();
-                if (item.checkError && (data.error || data.reason === 'RateLimited')) {
-                    continue;
-                }
-                
-                // Case 1: IP returns 'loc' (like ipinfo.io: "lat,lon")
-                if (item.locKey && data[item.locKey]) {
-                    sendValueToStreamlit(`coords:${data[item.locKey]}`);
-                    locateBtn.innerHTML = originalText;
-                    locateBtn.disabled = false;
-                    return;
-                }
-                
-                // Case 2: IP returns explicit lat/lon
-                const lat = data.latitude || data[item.latKey];
-                const lon = data.longitude || data[item.lonKey];
-                if (lat && lon) {
-                    sendValueToStreamlit(`coords:${lat},${lon}`);
-                    locateBtn.innerHTML = originalText;
-                    locateBtn.disabled = false;
-                    return;
-                }
-                
-                // Case 3: Fallback to city name string matching
-                const city = data.city || data.cityName;
-                if (city) {
-                    sendValueToStreamlit(city);
-                    locateBtn.innerHTML = originalText;
-                    locateBtn.disabled = false;
-                    return;
-                }
-            } catch (err) {
-                console.warn("Failed IP location check on " + item.url, err);
-            }
-        }
-
-        locateBtn.innerHTML = originalText;
-        locateBtn.disabled = false;
-        alert("Location lookup failed. Please search for your district manually.");
-    }
-    </script>
-    """
-    components.html(search_form_html, height=55)
+    # Native search input widget
+    st.text_input(
+        "Search District",
+        value="",
+        placeholder="🔍 Search district name (e.g. Salem, Patna...)",
+        label_visibility="collapsed",
+        key="main_search_input"
+    )
     
     # Direct browse selectbox dropdowns
     st.write("") # small spacing
