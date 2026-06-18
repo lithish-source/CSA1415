@@ -785,6 +785,28 @@ if "chat" in st.query_params:
 
 # ----------------- PARSE ROUTING QUERY PARAMETERS & SEARCH INPUT -----------------
 
+# Helper function to geolocate user IP on backend (resilient to browser CORS/tracking blocks)
+def geolocate_ip_python():
+    urls = [
+        "https://ipinfo.io/json",
+        "https://ipapi.co/json/",
+        "https://freeipapi.com/api/json"
+    ]
+    for url in urls:
+        try:
+            res = requests.get(url, timeout=3)
+            if res.status_code == 200:
+                data = res.json()
+                if "loc" in data:
+                    return data["loc"]
+                lat = data.get("latitude")
+                lon = data.get("longitude")
+                if lat and lon:
+                    return f"{lat},{lon}"
+        except Exception:
+            continue
+    return None
+
 # Helper function to resolve search query to a district/state
 def resolve_search_query(query_str):
     cleaned_search = query_str.strip().lower()
@@ -930,10 +952,35 @@ with col_search_main:
         div.st-key-main_search_input input::placeholder {
             color: #64748b !important;
         }
-        /* Custom adjustment to align and style the geolocator iframe container */
-        div[data-testid="stColumn"] iframe[title="src.locator_component.geo_locator"] {
-            border: none !important;
-            background: transparent !important;
+        /* Custom styling for the native Locate Me button */
+        div.st-key-locate_me_button button {
+            background-color: rgba(255, 255, 255, 0.05) !important;
+            color: #cbd5e1 !important;
+            font-weight: 600 !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            border-radius: 12px !important;
+            padding: 12px 16px !important;
+            cursor: pointer !important;
+            font-size: 0.9rem !important;
+            transition: background-color 0.2s, color 0.2s, border-color 0.2s !important;
+            width: 100% !important;
+            height: 44px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-sizing: border-box !important;
+        }
+        div.st-key-locate_me_button button:hover {
+            background-color: rgba(255, 255, 255, 0.1) !important;
+            color: #ffffff !important;
+            border-color: rgba(255, 255, 255, 0.2) !important;
+        }
+        div.st-key-locate_me_button button:active {
+            background-color: rgba(255, 255, 255, 0.15) !important;
+        }
+        div.st-key-locate_me_button p {
+            margin: 0 !important;
+            line-height: 1 !important;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -949,125 +996,16 @@ with col_search_main:
             key="main_search_input"
         )
     with col_loc:
-        # Render the custom HTML geolocator form block that submits coordinates to parent window
-        geo_btn_html = """
-        <style>
-        body {
-            margin: 0;
-            background-color: transparent;
-            overflow: hidden;
-        }
-        .geo-btn {
-            background-color: rgba(255, 255, 255, 0.05);
-            color: #cbd5e1;
-            font-weight: 600;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 12px;
-            padding: 12px 16px;
-            cursor: pointer;
-            font-size: 0.9rem;
-            transition: background-color 0.2s, color 0.2s;
-            white-space: nowrap;
-            width: 100%;
-            box-sizing: border-box;
-            height: 42px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        }
-        .geo-btn:hover {
-            background-color: rgba(255, 255, 255, 0.1);
-            color: #ffffff;
-        }
-        .geo-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        </style>
-        
-        <form id="geoForm" action="/" method="get" target="_parent">
-            <input type="hidden" name="search" id="searchParam" value="">
-        </form>
-        
-        <button type="button" class="geo-btn" id="locateBtn" onclick="geoLocate()">📍 Locate Me</button>
-        
-        <script>
-        async function geoLocate() {
-            const locateBtn = document.getElementById('locateBtn');
-            const originalText = locateBtn.innerHTML;
-            locateBtn.innerHTML = "⌛ Locating...";
-            locateBtn.disabled = true;
-
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    async (position) => {
-                        const lat = position.coords.latitude;
-                        const lon = position.coords.longitude;
-                        submitCoords(`coords:${lat},${lon}`);
-                    },
-                    async (error) => {
-                        console.warn("HTML5 Geolocation failed, trying IP coordinates...", error);
-                        await geoLocateIP(locateBtn, originalText);
-                    },
-                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-                );
-            } else {
-                await geoLocateIP(locateBtn, originalText);
-            }
-        }
-
-        async function geoLocateIP(locateBtn, originalText) {
-            const urls = [
-                { url: 'https://ipinfo.io/json', locKey: 'loc' },
-                { url: 'https://ipapi.co/json/', latKey: 'latitude', lonKey: 'longitude', checkError: true },
-                { url: 'https://geolocation-db.com/json/', latKey: 'latitude', lonKey: 'longitude' },
-                { url: 'https://freeipapi.com/api/json', latKey: 'latitude', lonKey: 'longitude' }
-            ];
-
-            for (const item of urls) {
-                try {
-                    const res = await fetch(item.url);
-                    if (!res.ok) continue;
-                    const data = await res.json();
-                    if (item.checkError && (data.error || data.reason === 'RateLimited')) {
-                        continue;
-                    }
-                    
-                    if (item.locKey && data[item.locKey]) {
-                        submitCoords(`coords:${data[item.locKey]}`);
-                        return;
-                    }
-                    
-                    const lat = data.latitude || data[item.latKey];
-                    const lon = data.longitude || data[item.lonKey];
-                    if (lat && lon) {
-                        submitCoords(`coords:${lat},${lon}`);
-                        return;
-                    }
-                    
-                    const city = data.city || data[item.cityName];
-                    if (city) {
-                        submitCoords(city);
-                        return;
-                    }
-                } catch (err) {
-                    console.warn("Failed IP location check on " + item.url, err);
-                }
-            }
-
-            locateBtn.innerHTML = originalText;
-            locateBtn.disabled = false;
-            alert("Location lookup failed. Please search for your district manually.");
-        }
-
-        function submitCoords(val) {
-            document.getElementById('searchParam').value = val;
-            document.getElementById('geoForm').submit();
-        }
-        </script>
-        """
-        components.html(geo_btn_html, height=45)
+        # Native Styled "Locate Me" button that runs geolocator in Python
+        if st.button("📍 Locate Me", key="locate_me_button"):
+            with st.spinner("Locating..."):
+                coords = geolocate_ip_python()
+                if coords:
+                    resolve_search_query(f"coords:{coords}")
+                    st.query_params["search"] = f"{st.session_state.active_district}, {st.session_state.active_state}"
+                    st.rerun()
+                else:
+                    st.error("Failed to detect location automatically. Please search manually.")
     
     # Direct browse selectbox dropdowns
     st.write("") # small spacing
