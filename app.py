@@ -2,6 +2,7 @@ import os
 import requests
 import tempfile
 import textwrap
+import urllib.parse
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -694,9 +695,91 @@ DEFAULT_NVIDIA_KEY = "nvapi-fykCdnCYcFlyAXtP_emInuEw-0Gkwp2r23gyI6KTgPwKJO1nGvcS
 
 if "active_district" not in st.session_state:
     st.session_state.active_district = "Salem" # default starting district
+if "active_state" not in st.session_state:
+    st.session_state.active_state = "Tamil Nadu" # default starting state
 
 if "nvidia_api_key" not in st.session_state:
     st.session_state.nvidia_api_key = DEFAULT_NVIDIA_KEY
+
+# ----------------- STANDALONE CHATBOT ROUTER -----------------
+if "chat" in st.query_params:
+    # Set page style optimized for chatbot popup
+    st.markdown("""
+        <style>
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+            background-color: #0f172a !important; /* Slate 900 */
+            color: #f1f5f9 !important;
+            font-family: 'Inter', sans-serif !important;
+        }
+        header {
+            visibility: hidden;
+        }
+        .chat-header {
+            background-color: #1e293b;
+            padding: 15px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            margin-bottom: 20px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    search_dist = st.query_params.get("search", "Salem")
+    search_state = st.query_params.get("state", None)
+    
+    if search_state:
+        dist_row = risk_df[(risk_df[district_col].str.lower() == search_dist.lower()) & (risk_df[state_col].str.lower() == search_state.lower())]
+    else:
+        dist_row = risk_df[risk_df[district_col].str.lower() == search_dist.lower()]
+        
+    if dist_row.empty:
+        active_dist = "Salem"
+        active_state = "Tamil Nadu"
+    else:
+        active_dist = dist_row.iloc[0][district_col]
+        active_state = dist_row.iloc[0][state_col]
+        
+    st.markdown(f"""
+        <div class="chat-header">
+            <div style="font-weight: 800; font-size: 1.1rem; color: #ffffff;">🛡️ Guardian Advisor: {active_dist}, {active_state}</div>
+            <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 2px;">AI Water Quality Assistant</div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    if "standalone_chat_history" not in st.session_state:
+        st.session_state.standalone_chat_history = [
+            {"role": "assistant", "content": f"Hello! I am your GroundWater Guardian Advisor for **{active_dist}, {active_state}**. Ask me any questions about local safety, contaminant limits, or filtration recommendations."}
+        ]
+        
+    for msg in st.session_state.standalone_chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            
+    if prompt := st.chat_input("Ask a question about local water quality..."):
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        st.session_state.standalone_chat_history.append({"role": "user", "content": prompt})
+        
+        with st.spinner("Analyzing..."):
+            try:
+                response = answer_citizen_query(
+                    risk_df,
+                    prompt,
+                    active_dist,
+                    water_cols,
+                    api_key=st.session_state.nvidia_api_key,
+                    active_state=active_state
+                )
+            except Exception as e:
+                response = f"Error calling AI: {e}"
+                
+        with st.chat_message("assistant"):
+            st.markdown(response)
+        st.session_state.standalone_chat_history.append({"role": "assistant", "content": response})
+        st.rerun()
+    st.stop()
 
 # ----------------- PARSE ROUTING QUERY PARAMETERS -----------------
 # 1. Hidden parent-child DOM communication text input
@@ -739,6 +822,7 @@ if "hidden_comm_input" in st.session_state and st.session_state.hidden_comm_inpu
                 nearest_dist = distances.loc[min_idx]
                 
                 st.session_state.active_district = nearest_district
+                st.session_state.active_state = nearest_state
                 if nearest_dist > 500:
                     st.session_state.state_alert = f"Detected location is outside local region. Showing nearest registry district: **{nearest_district}** ({nearest_state}), approx. {nearest_dist:.0f} km away."
                 else:
@@ -749,24 +833,37 @@ if "hidden_comm_input" in st.session_state and st.session_state.hidden_comm_inpu
             st.session_state.state_alert = f"Error matching coordinates: {ex}"
     else:
         cleaned_search_lower = cleaned_search.lower()
-        dist_match = risk_df[risk_df[district_col].str.lower() == cleaned_search_lower]
-        if not dist_match.empty:
-            st.session_state.active_district = dist_match.iloc[0][district_col]
-        else:
-            state_match = risk_df[risk_df[state_col].str.lower() == cleaned_search_lower]
-            if not state_match.empty:
-                state_dists = risk_df[risk_df[state_col].str.lower() == cleaned_search_lower].sort_values(by="Risk Score", ascending=False)
-                st.session_state.active_district = state_dists.iloc[0][district_col]
-                st.session_state.state_alert = f"Showing highest risk district in **{state_dists.iloc[0][state_col]}**."
+        if "," in cleaned_search_lower:
+            parts = [p.strip() for p in cleaned_search_lower.split(",", 1)]
+            d_search, s_search = parts[0], parts[1]
+            exact_match = risk_df[(risk_df[district_col].str.lower() == d_search) & (risk_df[state_col].str.lower() == s_search)]
+            if not exact_match.empty:
+                st.session_state.active_district = exact_match.iloc[0][district_col]
+                st.session_state.active_state = exact_match.iloc[0][state_col]
             else:
-                partial_match = risk_df[risk_df[district_col].str.lower().str.contains(cleaned_search_lower)]
-                if not partial_match.empty:
-                    st.session_state.active_district = partial_match.iloc[0][district_col]
+                st.session_state.state_alert = f"No match found for district '{d_search}' in state '{s_search}'."
+        else:
+            dist_match = risk_df[risk_df[district_col].str.lower() == cleaned_search_lower]
+            if not dist_match.empty:
+                st.session_state.active_district = dist_match.iloc[0][district_col]
+                st.session_state.active_state = dist_match.iloc[0][state_col]
+            else:
+                state_match = risk_df[risk_df[state_col].str.lower() == cleaned_search_lower]
+                if not state_match.empty:
+                    state_dists = risk_df[risk_df[state_col].str.lower() == cleaned_search_lower].sort_values(by="Risk Score", ascending=False)
+                    st.session_state.active_district = state_dists.iloc[0][district_col]
+                    st.session_state.active_state = state_dists.iloc[0][state_col]
+                    st.session_state.state_alert = f"Showing highest risk district in **{state_dists.iloc[0][state_col]}**."
                 else:
-                    st.session_state.state_alert = f"No match found for '**{cleaned_search}**'. Please check spelling and try again."
+                    partial_match = risk_df[risk_df[district_col].str.lower().str.contains(cleaned_search_lower)]
+                    if not partial_match.empty:
+                        st.session_state.active_district = partial_match.iloc[0][district_col]
+                        st.session_state.active_state = partial_match.iloc[0][state_col]
+                    else:
+                        st.session_state.state_alert = f"No match found for '**{cleaned_search}**'. Please check spelling and try again."
                 
     del st.session_state["hidden_comm_input"]
-    st.query_params["search"] = st.session_state.active_district
+    st.query_params["search"] = f"{st.session_state.active_district}, {st.session_state.active_state}"
     st.rerun()
 
 # Now instantiate the text input widget. It will be empty on the new rerun.
@@ -778,25 +875,36 @@ if "search" in query_params:
     search_val = query_params["search"]
     cleaned_search = search_val.strip().lower()
     
-    # Check if matches district name
-    dist_match = risk_df[risk_df[district_col].str.lower() == cleaned_search]
-    if not dist_match.empty:
-        st.session_state.active_district = dist_match.iloc[0][district_col]
+    if "," in cleaned_search:
+        parts = [p.strip() for p in cleaned_search.split(",", 1)]
+        d_search, s_search = parts[0], parts[1]
+        exact_match = risk_df[(risk_df[district_col].str.lower() == d_search) & (risk_df[state_col].str.lower() == s_search)]
+        if not exact_match.empty:
+            st.session_state.active_district = exact_match.iloc[0][district_col]
+            st.session_state.active_state = exact_match.iloc[0][state_col]
     else:
-        # Check if matches state name
-        state_match = risk_df[risk_df[state_col].str.lower() == cleaned_search]
-        if not state_match.empty:
-            state_dists = risk_df[risk_df[state_col].str.lower() == cleaned_search].sort_values(by="Risk Score", ascending=False)
-            st.session_state.active_district = state_dists.iloc[0][district_col]
-            st.session_state.state_alert = f"Showing highest risk district in **{state_dists.iloc[0][state_col]}**."
+        # Check if matches district name
+        dist_match = risk_df[risk_df[district_col].str.lower() == cleaned_search]
+        if not dist_match.empty:
+            st.session_state.active_district = dist_match.iloc[0][district_col]
+            st.session_state.active_state = dist_match.iloc[0][state_col]
         else:
-            # Check partial district match
-            partial_match = risk_df[risk_df[district_col].str.lower().str.contains(cleaned_search)]
-            if not partial_match.empty:
-                st.session_state.active_district = partial_match.iloc[0][district_col]
+            # Check if matches state name
+            state_match = risk_df[risk_df[state_col].str.lower() == cleaned_search]
+            if not state_match.empty:
+                state_dists = risk_df[risk_df[state_col].str.lower() == cleaned_search].sort_values(by="Risk Score", ascending=False)
+                st.session_state.active_district = state_dists.iloc[0][district_col]
+                st.session_state.active_state = state_dists.iloc[0][state_col]
+                st.session_state.state_alert = f"Showing highest risk district in **{state_dists.iloc[0][state_col]}**."
+            else:
+                # Check partial district match
+                partial_match = risk_df[risk_df[district_col].str.lower().str.contains(cleaned_search)]
+                if not partial_match.empty:
+                    st.session_state.active_district = partial_match.iloc[0][district_col]
+                    st.session_state.active_state = partial_match.iloc[0][state_col]
 
 # Set active district query parameter back to keep URL aligned
-st.query_params["search"] = st.session_state.active_district
+st.query_params["search"] = f"{st.session_state.active_district}, {st.session_state.active_state}"
 
 # ----------------- BRANDING HEADER -----------------
 st.markdown("""
@@ -1041,13 +1149,45 @@ with col_search_main:
     """
     components.html(search_form_html, height=55)
     
+    # Direct browse selectbox dropdowns
+    st.write("") # small spacing
+    col_drop_state, col_drop_dist = st.columns(2)
+    with col_drop_state:
+        selected_state = st.selectbox(
+            "Select State",
+            sorted(risk_df[state_col].unique()),
+            index=sorted(risk_df[state_col].unique()).index(st.session_state.active_state) if st.session_state.active_state in risk_df[state_col].values else 0,
+            key="main_state_select",
+            label_visibility="collapsed"
+        )
+    with col_drop_dist:
+        state_districts = sorted(risk_df[risk_df[state_col] == selected_state][district_col].unique())
+        try:
+            default_dist_idx = state_districts.index(st.session_state.active_district)
+        except ValueError:
+            default_dist_idx = 0
+            
+        selected_district = st.selectbox(
+            "Select District",
+            state_districts,
+            index=default_dist_idx,
+            key="main_district_select",
+            label_visibility="collapsed"
+        )
+
+    if selected_district != st.session_state.active_district or selected_state != st.session_state.active_state:
+        st.session_state.active_district = selected_district
+        st.session_state.active_state = selected_state
+        st.query_params["search"] = f"{selected_district}, {selected_state}"
+        st.rerun()
+    
     # State redirect alert
     if "state_alert" in st.session_state and st.session_state.state_alert:
         st.markdown(f'<div class="state-alert-custom">{st.session_state.state_alert}</div>', unsafe_allow_html=True)
         del st.session_state.state_alert 
 
 # ----------------- SECTION 2: SAFETY ASSESSMENT & DETAILS -----------------
-active_row = risk_df[risk_df[district_col] == st.session_state.active_district].iloc[0]
+active_row = risk_df[(risk_df[district_col] == st.session_state.active_district) & (risk_df[state_col] == st.session_state.active_state)].iloc[0]
 hazards, risk_tier, dom_hazard, safety_status = analyze_district_health_hazards(active_row, water_cols)
 
 score = active_row["Risk Score"]
@@ -1279,6 +1419,7 @@ with st.spinner("Rendering interactive map..."):
 if event_map and "selection" in event_map and "points" in event_map["selection"] and len(event_map["selection"]["points"]) > 0:
     point = event_map["selection"]["points"][0]
     clicked_district = None
+    clicked_state = None
     if "hovertext" in point:
         clicked_district = point["hovertext"]
     elif "location" in point:
@@ -1286,11 +1427,19 @@ if event_map and "selection" in event_map and "points" in event_map["selection"]
     elif "customdata" in point and len(point["customdata"]) > 0:
         clicked_district = point["customdata"][0]
         
+    if "customdata" in point and len(point["customdata"]) > 0:
+        clicked_state = point["customdata"][0]
+        
     if clicked_district:
-        dist_match = risk_df[risk_df[district_col].str.lower() == clicked_district.strip().lower()]
+        if clicked_state:
+            dist_match = risk_df[(risk_df[district_col].str.lower() == clicked_district.strip().lower()) & (risk_df[state_col].str.lower() == clicked_state.strip().lower())]
+        else:
+            dist_match = risk_df[risk_df[district_col].str.lower() == clicked_district.strip().lower()]
+            
         if not dist_match.empty:
             st.session_state.active_district = dist_match.iloc[0][district_col]
-            st.query_params["search"] = st.session_state.active_district
+            st.session_state.active_state = dist_match.iloc[0][state_col]
+            st.query_params["search"] = f"{st.session_state.active_district}, {st.session_state.active_state}"
             st.rerun()
 
 
@@ -1311,11 +1460,11 @@ with col_comp_sel2:
     comp_state2 = st.selectbox("Select State 2", sorted(risk_df[state_col].unique()))
     comp_dist2 = st.selectbox("Select District 2", sorted(risk_df[risk_df[state_col] == comp_state2][district_col].unique()))
 
-if comp_dist1 != comp_dist2:
+if comp_dist1 != comp_dist2 or comp_state1 != comp_state2:
     col_c1, col_c_radar, col_c2 = st.columns([1, 1.8, 1])
     
-    row1 = risk_df[risk_df[district_col] == comp_dist1].iloc[0]
-    row2 = risk_df[risk_df[district_col] == comp_dist2].iloc[0]
+    row1 = risk_df[(risk_df[state_col] == comp_state1) & (risk_df[district_col] == comp_dist1)].iloc[0]
+    row2 = risk_df[(risk_df[state_col] == comp_state2) & (risk_df[district_col] == comp_dist2)].iloc[0]
     
     # Left Card
     with col_c1:
@@ -1391,262 +1540,41 @@ if comp_dist1 != comp_dist2:
             st.plotly_chart(fig_r, use_container_width=True)
 
 # ----------------- SECTION 7: FLOATING AI ADVISOR -----------------
-# Initialize chatbot state
-if "chat_expanded" not in st.session_state:
-    st.session_state.chat_expanded = False
-
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = [
-        {"role": "assistant", "content": f"Hello! I am your AI Advisor. Ask me anything about groundwater safety in **{st.session_state.active_district}** or compare surrounding regions."}
-    ]
-
-# Inject floating CSS rules
-st.markdown("""
+st.markdown(f"""
     <style>
-    /* Styling for the floating FAB when collapsed */
-    div[data-testid="stVerticalBlock"]:has(> div > div.floating-chat-fab) {
-        position: fixed !important;
-        bottom: 24px !important;
-        right: 24px !important;
-        left: auto !important;
-        width: 60px !important;
-        height: 60px !important;
-        z-index: 999999 !important;
-        background: transparent !important;
-        border: none !important;
-        padding: 0 !important;
-    }
-    div[data-testid="stVerticalBlock"]:has(> div > div.floating-chat-fab) button {
-        background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
+    .custom-chat-fab {{
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        width: 60px;
+        height: 60px;
+        background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
         color: white !important;
-        border-radius: 50% !important;
-        border: 1px solid rgba(255, 255, 255, 0.15) !important;
-        width: 60px !important;
-        height: 60px !important;
-        box-shadow: 0 8px 24px rgba(59, 130, 246, 0.5) !important;
-        font-size: 24px !important;
-        cursor: pointer !important;
-        transition: transform 0.2s !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        padding: 0 !important;
-        margin: 0 !important;
-    }
-    div[data-testid="stVerticalBlock"]:has(> div > div.floating-chat-fab) button:hover {
-        transform: scale(1.05) !important;
-        border-color: #3b82f6 !important;
-    }
-    
-    /* Styling for the expanded floating container */
-    div[data-testid="stVerticalBlock"]:has(> div > div.floating-chat-expanded) {
-        position: fixed !important;
-        bottom: 24px !important;
-        right: 24px !important;
-        left: auto !important;
-        width: 380px !important;
-        z-index: 999999 !important;
-        background-color: #0f172a !important; /* Slate 900 */
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        border-radius: 20px !important;
-        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6) !important;
-        padding: 12px !important;
-        display: flex !important;
-        flex-direction: column !important;
-    }
-    
-    .suggestion-chip button {
-        background-color: rgba(255, 255, 255, 0.04) !important;
-        border: 1px solid rgba(255, 255, 255, 0.08) !important;
-        border-radius: 20px !important;
-        padding: 4px 10px !important;
-        font-size: 0.72rem !important;
-        color: #cbd5e1 !important;
-        cursor: pointer !important;
-        transition: background-color 0.2s !important;
-        margin: 2px !important;
-        display: inline-block !important;
-        width: auto !important;
-    }
-    .suggestion-chip button:hover {
-        background-color: rgba(255, 255, 255, 0.08) !important;
-        color: #ffffff !important;
-        border-color: #3b82f6 !important;
-    }
-    
-    .floating-input-col div[data-testid="stTextInput"] input {
-        border-radius: 10px !important;
-        padding: 6px 12px !important;
-        font-size: 0.8rem !important;
-        height: 32px !important;
-        background-color: #1e293b !important;
-        border: 1px solid rgba(255,255,255,0.08) !important;
-    }
-    .floating-submit-col button {
-        height: 32px !important;
-        padding: 0 12px !important;
-        font-size: 0.8rem !important;
-        border-radius: 10px !important;
-        width: 100% !important;
-        background-color: #3b82f6 !important;
-        color: #ffffff !important;
-        font-weight: 600 !important;
-        border: none !important;
-    }
-    .floating-submit-col button:hover {
-        background-color: #2563eb !important;
-    }
-    
-    .close-chat-btn button {
-        background: transparent !important;
-        border: 0 !important;
-        color: #94a3b8 !important;
-        font-size: 0.85rem !important;
-        padding: 0 !important;
-        margin-top: 10px !important;
-        cursor: pointer !important;
-        width: auto !important;
-        float: right;
-    }
-    .close-chat-btn button:hover {
-        color: #ffffff !important;
-    }
+        border-radius: 50%;
+        box-shadow: 0 8px 24px rgba(59, 130, 246, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 26px;
+        cursor: pointer;
+        z-index: 999999;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        text-decoration: none !important;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }}
+    .custom-chat-fab:hover {{
+        transform: scale(1.08);
+        box-shadow: 0 10px 28px rgba(59, 130, 246, 0.6);
+        color: white !important;
+    }}
     </style>
+    <a class="custom-chat-fab" 
+       href="/?chat=1&search={urllib.parse.quote(st.session_state.active_district)}&state={urllib.parse.quote(st.session_state.active_state)}" 
+       target="_blank" 
+       onclick="window.open(this.href, 'GroundWaterGuardianAI', 'width=450,height=650,menubar=no,toolbar=no,location=no,status=no,resizable=yes'); return false;">
+       💬
+    </a>
 """, unsafe_allow_html=True)
-
-if not st.session_state.chat_expanded:
-    with st.container():
-        st.markdown('<div class="floating-chat-fab"></div>', unsafe_allow_html=True)
-        if st.button("💬", key="expand_chat_btn"):
-            st.session_state.chat_expanded = True
-            st.rerun()
-else:
-    with st.container():
-        st.markdown('<div class="floating-chat-expanded"></div>', unsafe_allow_html=True)
-        
-        # 1. Header
-        col_hdr_title, col_hdr_btn = st.columns([4, 1])
-        with col_hdr_title:
-            st.markdown(f"""
-                <div style="padding: 0 0 5px 0;">
-                    <span style="font-weight: 800; font-size: 0.95rem; color: #ffffff; display: flex; align-items: center; gap: 6px;">
-                        🛡️ Advisor: {st.session_state.active_district}
-                    </span>
-                    <span style="font-size: 0.72rem; color: #94a3b8; display: block; margin-top: 1px;">AI Water Quality Assistant</span>
-                </div>
-            """, unsafe_allow_html=True)
-        with col_hdr_btn:
-            st.markdown('<div class="close-chat-btn"></div>', unsafe_allow_html=True)
-            if st.button("✕", key="close_chat_btn"):
-                st.session_state.chat_expanded = False
-                st.rerun()
-
-        # 2. Chat history thread
-        bubbles_html = ""
-        for msg in st.session_state.chat_history:
-            is_user = msg["role"] == "user"
-            bg_color = "rgba(59, 130, 246, 0.15)" if is_user else "rgba(255, 255, 255, 0.05)"
-            border_color = "rgba(59, 130, 246, 0.3)" if is_user else "rgba(255, 255, 255, 0.08)"
-            align_self = "flex-end" if is_user else "flex-start"
-            margin_left = "40px" if is_user else "0"
-            margin_right = "0" if is_user else "40px"
-            name = "You" if is_user else "Guardian Advisor"
-            avatar = "👤" if is_user else "🛡️"
-            
-            bubbles_html += f"""
-            <div style="
-                background-color: {bg_color};
-                border: 1px solid {border_color};
-                border-radius: 12px;
-                padding: 10px 12px;
-                font-size: 0.82rem;
-                color: #f1f5f9;
-                line-height: 1.4;
-                max-width: 90%;
-                margin-left: {margin_left};
-                margin-right: {margin_right};
-                align-self: {align_self};
-            ">
-                <div style="font-size: 0.65rem; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; display: flex; align-items: center; gap: 4px;">
-                    <span>{avatar}</span> <span>{name}</span>
-                </div>
-                <div>{msg["content"]}</div>
-            </div>
-            """
-            
-        st.markdown(f"""
-            <div class="chat-scroll-wrapper" style="
-                max-height: 250px;
-                overflow-y: auto;
-                padding: 10px 10px;
-                display: flex;
-                flex-direction: column;
-                gap: 8px;
-                border-top: 1px solid rgba(255, 255, 255, 0.06);
-                border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-                background-color: rgba(0, 0, 0, 0.15);
-                border-radius: 8px;
-            ">
-                {bubbles_html}
-            </div>
-            <script>
-                const container = document.querySelector('.chat-scroll-wrapper');
-                if (container) {{
-                    container.scrollTop = container.scrollHeight;
-                }}
-            </script>
-        """, unsafe_allow_html=True)
-        
-        # 3. Suggestion Chips
-        st.markdown("<div style='font-size: 0.7rem; font-weight:700; color:#64748b; margin-top:8px; margin-bottom:4px; text-transform:uppercase;'>Suggested Questions</div>", unsafe_allow_html=True)
-        col_chip1, col_chip2, col_chip3 = st.columns(3)
-        chip_clicked = None
-        with col_chip1:
-            st.markdown('<div class="suggestion-chip"></div>', unsafe_allow_html=True)
-            if st.button("Is water safe?", key="chip_safe"):
-                chip_clicked = f"Is the groundwater in {st.session_state.active_district} safe to drink?"
-        with col_chip2:
-            st.markdown('<div class="suggestion-chip"></div>', unsafe_allow_html=True)
-            if st.button("Filter advice", key="chip_filter"):
-                chip_clicked = f"What specific water filter should I buy for {st.session_state.active_district}?"
-        with col_chip3:
-            st.markdown('<div class="suggestion-chip"></div>', unsafe_allow_html=True)
-            if st.button("Compare nearby", key="chip_nearby"):
-                chip_clicked = f"Are there safer groundwater options near {st.session_state.active_district}?"
-
-        # 4. Input Form
-        with st.form("advisor_floating_form", clear_on_submit=True):
-            col_inp, col_sub = st.columns([3.2, 1])
-            with col_inp:
-                st.markdown('<div class="floating-input-col"></div>', unsafe_allow_html=True)
-                floating_prompt = st.text_input(
-                    "Ask advisor...",
-                    placeholder="Ask advisor...",
-                    label_visibility="collapsed",
-                    key="float_prompt_input"
-                )
-            with col_sub:
-                st.markdown('<div class="floating-submit-col"></div>', unsafe_allow_html=True)
-                float_submitted = st.form_submit_button("Send")
-                
-        user_query = None
-        if chip_clicked:
-            user_query = chip_clicked
-        elif float_submitted and floating_prompt.strip():
-            user_query = floating_prompt.strip()
-            
-        if user_query:
-            st.session_state.chat_history.append({"role": "user", "content": user_query})
-            with st.spinner("Analyzing..."):
-                response = answer_citizen_query(
-                    risk_df,
-                    user_query,
-                    st.session_state.active_district,
-                    water_cols,
-                    api_key=st.session_state.nvidia_api_key
-                )
-            st.session_state.chat_history.append({"role": "assistant", "content": response})
-            st.rerun()
 
 # ----------------- NATIONAL TRENDS -----------------
 st.markdown("<div style='margin-top:60px;'></div>", unsafe_allow_html=True)
@@ -1699,6 +1627,7 @@ with st.expander("National Trends & Contaminant Explorer"):
         if event_p and "selection" in event_p and "points" in event_p["selection"] and len(event_p["selection"]["points"]) > 0:
             point = event_p["selection"]["points"][0]
             clicked_district = None
+            clicked_state = None
             if "hovertext" in point:
                 clicked_district = point["hovertext"]
             elif "location" in point:
@@ -1706,11 +1635,19 @@ with st.expander("National Trends & Contaminant Explorer"):
             elif "customdata" in point and len(point["customdata"]) > 0:
                 clicked_district = point["customdata"][0]
                 
+            if "customdata" in point and len(point["customdata"]) > 0:
+                clicked_state = point["customdata"][0]
+                
             if clicked_district:
-                dist_match = risk_df[risk_df[district_col].str.lower() == clicked_district.strip().lower()]
+                if clicked_state:
+                    dist_match = risk_df[(risk_df[district_col].str.lower() == clicked_district.strip().lower()) & (risk_df[state_col].str.lower() == clicked_state.strip().lower())]
+                else:
+                    dist_match = risk_df[risk_df[district_col].str.lower() == clicked_district.strip().lower()]
+                    
                 if not dist_match.empty:
                     st.session_state.active_district = dist_match.iloc[0][district_col]
-                    st.query_params["search"] = st.session_state.active_district
+                    st.session_state.active_state = dist_match.iloc[0][state_col]
+                    st.query_params["search"] = f"{st.session_state.active_district}, {st.session_state.active_state}"
                     st.rerun()
 
 # Footer

@@ -133,7 +133,7 @@ The top 5 districts requiring immediate water quality remediation are:
     return brief
 
 
-def answer_citizen_query(df_risk: pd.DataFrame, query: str, active_district: str, water_cols: list, api_key: str = None):
+def answer_citizen_query(df_risk: pd.DataFrame, query: str, active_district: str, water_cols: list, api_key: str = None, active_state: str = None):
     """
     Answers a citizen's question about groundwater safety in their district,
     using the NVIDIA LLM API or a robust offline rule-based advisor.
@@ -180,7 +180,11 @@ def answer_citizen_query(df_risk: pd.DataFrame, query: str, active_district: str
                     break
                     
     # Fetch target district record
-    dist_rows = df_risk[df_risk["District"].str.lower() == target_dist.lower()]
+    if active_state and target_dist.lower() == active_district.lower():
+        dist_rows = df_risk[(df_risk["District"].str.lower() == target_dist.lower()) & (df_risk["State"].str.lower() == active_state.lower())]
+    else:
+        dist_rows = df_risk[df_risk["District"].str.lower() == target_dist.lower()]
+        
     if dist_rows.empty:
         dist_row = df_risk.iloc[0]
         target_dist = dist_row["District"]
